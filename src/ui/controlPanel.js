@@ -8,7 +8,12 @@ export function initControlPanel({
   setStarsEnabled,
   getLabelsEnabled,
   setLabelsEnabled,
-  onResetView
+  getCoordinatesMapEnabled,
+  setCoordinatesMapEnabled,
+  onResetView,
+  onViewSatellite,
+  onViewMoon,
+  onViewSun
 }) {
   const panel = document.getElementById('panel');
   if (!panel) return;
@@ -58,6 +63,21 @@ export function initControlPanel({
     const button = document.getElementById(id);
     if (!button) return;
     button.addEventListener('click', onClick);
+  }
+
+  function bindToggleButton({ id, get, set, onLabel, offLabel }) {
+    const button = document.getElementById(id);
+    if (!button) return;
+
+    const updateLabel = () => {
+      button.textContent = get() ? onLabel : offLabel;
+    };
+
+    updateLabel();
+    button.addEventListener('click', () => {
+      set(!get());
+      updateLabel();
+    });
   }
 
   bindSlider({
@@ -120,7 +140,29 @@ export function initControlPanel({
     });
   }
 
+  if (getCoordinatesMapEnabled && setCoordinatesMapEnabled) {
+    bindToggleButton({
+      id: 'toggleCoordinatesMap',
+      get: getCoordinatesMapEnabled,
+      set: setCoordinatesMapEnabled,
+      onLabel: 'Tắt chế độ tọa độ',
+      offLabel: 'Xem tọa độ'
+    });
+  }
+
   if (onResetView) {
     bindButton({ id: 'resetView', onClick: onResetView });
+  }
+
+  if (onViewSatellite) {
+    bindButton({ id: 'viewSatellite', onClick: onViewSatellite });
+  }
+
+  if (onViewMoon) {
+    bindButton({ id: 'viewMoon', onClick: onViewMoon });
+  }
+
+  if (onViewSun) {
+    bindButton({ id: 'viewSun', onClick: onViewSun });
   }
 }

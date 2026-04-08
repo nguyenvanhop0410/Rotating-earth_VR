@@ -12,6 +12,32 @@
 <body>
   <div id="info">Realistic Earth (Space Scene)</div>
 
+  <!-- Region Info Panel -->
+  <div id="regionInfo" class="region-info-panel hidden">
+    <div class="region-info-header">
+      <h3 id="regionName">Location</h3>
+      <button id="closeRegionInfo" class="info-close-btn">×</button>
+    </div>
+    <div class="region-info-content">
+      <div class="info-row">
+        <span class="info-label">Tọa độ:</span>
+        <span class="info-value"><span id="regionLat">0°</span>, <span id="regionLon">0°</span></span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Múi giờ:</span>
+        <span class="info-value" id="regionTimezone">UTC+0</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Giờ hiện tại:</span>
+        <span class="info-value" id="regionCurrentTime">--:--:--</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Giờ chuẩn Greenwich (UTC+0):</span>
+        <span class="info-value" id="regionUtcTime">--:--:--</span>
+      </div>
+    </div>
+  </div>
+
   <div id="panel">
     <div class="panel-header">
       <h3>Mission Control</h3>
@@ -36,7 +62,15 @@
         <span>Hiện địa danh</span>
         <input id="toggleLabels" type="checkbox" checked />
       </label>
+      <button id="toggleCoordinatesMap" class="ghost-btn" type="button">Xem tọa độ</button>
       <button id="resetView" class="ghost-btn" type="button">Reset góc nhìn</button>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Góc nhìn nhanh</div>
+      <button id="viewSatellite" class="ghost-btn" type="button">Góc nhìn vệ tinh</button>
+      <button id="viewMoon" class="ghost-btn" type="button">Góc nhìn từ Mặt Trăng</button>
+      <button id="viewSun" class="ghost-btn" type="button">Góc nhìn từ Mặt Trời</button>
     </div>
 
     <div class="section">

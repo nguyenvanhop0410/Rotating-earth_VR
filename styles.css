@@ -178,3 +178,86 @@ input[type="checkbox"] {
     font-size: 11px;
   }
 }
+
+/* Region Info Panel Styles */
+.region-info-panel {
+  position: fixed;
+  width: 320px;
+  color: #f4f7ff;
+  background:
+    radial-gradient(120% 120% at 15% -12%, rgba(255, 182, 106, 0.24), rgba(0, 0, 0, 0) 46%),
+    linear-gradient(165deg, rgba(28, 14, 8, 0.92), rgba(20, 10, 5, 0.78));
+  border: 1px solid rgba(255, 171, 132, 0.34);
+  box-shadow: 0 22px 48px rgba(2, 8, 18, 0.62);
+  backdrop-filter: blur(14px);
+  padding: 16px;
+  border-radius: 16px;
+  z-index: 11;
+  user-select: none;
+  transition: opacity 0.3s ease;
+  pointer-events: auto;
+}
+
+.region-info-panel.hidden {
+  display: none;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.region-info-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 171, 132, 0.3);
+  padding-bottom: 10px;
+}
+
+.region-info-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff5e6;
+}
+
+.info-close-btn {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 24px;
+  cursor: pointer;
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s ease;
+}
+
+.info-close-btn:hover {
+  color: #fff5e6;
+}
+
+.region-info-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.info-label {
+  color: rgba(255, 255, 255, 0.7);
+  font-weight: 500;
+}
+
+.info-value {
+  color: #fff5e6;
+  font-weight: 600;
+}

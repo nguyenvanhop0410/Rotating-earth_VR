@@ -3,7 +3,7 @@ import * as THREE from 'three';
 export const sunPosition = new THREE.Vector3(30, 0.5, -6);
 
 export const SETTINGS = {
-  earthRadius: 1.2,
+  earthRadius: 1.3,
   axialTiltDeg: 23.4,
   earthSpin: 0.0012,
   cloudsSpin: 0.0015,
@@ -18,11 +18,11 @@ export const SETTINGS = {
   // Put textures in ./assets/ and keep these names, or set enableRealTextures=false
   enableRealTextures: true,
   textures: {
-    day: './assets/daymap_2048.png',
+    day: './assets/daymap_16k.jpg',
     normal: 'https://threejs.org/examples/textures/planets/earth_normal_2048.jpg',
     roughness: './assets/earth_roughness.jpg',
     specular: 'https://threejs.org/examples/textures/planets/earth_specular_2048.jpg',
-    night: './assets/nightmap_8k.jpg',
+    night: './assets/nightmap_16k.jpg',
     clouds: './assets/clouds_8k.jpg'
   }
 };

@@ -6,7 +6,6 @@ export function createStarfield({ starCount = 4200, size = 0.28, opacity = 0.95 
   const color = new THREE.Color();
 
   for (let i = 0; i < starCount; i++) {
-    // Random direction on sphere
     const u = Math.random();
     const v = Math.random();
     const theta = 2 * Math.PI * u;
@@ -19,9 +18,8 @@ export function createStarfield({ starCount = 4200, size = 0.28, opacity = 0.95 
     positions[i * 3 + 1] = y;
     positions[i * 3 + 2] = z;
 
-    // Slight color variation
     const t = Math.random();
-    color.setHSL(0.55 + t * 0.1, 0.2, 0.72 + t * 0.2);
+    color.setHSL(0.55 + t * 0.1, 0.18, 0.72 + t * 0.12);
     colors[i * 3 + 0] = color.r;
     colors[i * 3 + 1] = color.g;
     colors[i * 3 + 2] = color.b;

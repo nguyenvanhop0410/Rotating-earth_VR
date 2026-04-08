@@ -9,25 +9,33 @@ import { createStarfield } from './scene/starfield.js';
 import { createGalaxyBackdrop } from './scene/galaxy.js';
 import { createEarth } from './scene/earth.js';
 import { createMoon } from './scene/moon.js';
+import { createSatellite } from './scene/satellite.js';
 import { createRegionLabels, updateRegionLabels } from './scene/regions.js';
 
 let camera, scene, renderer;
 let controls;
 let earthGroup, earthMesh, cloudsMesh;
+let coordinatesOverlayEnabled = false;
+let coordinatesMesh;
 let updateMoon;
+let updateSatellite;
 let regionsGroup;
 let sunGroup;
 let keySunLight;
+let moonPivotRef;
+let satelliteGroupRef;
+let moonMeshRef;
 let controller1, controller2;
 let worldRoot;
 let vrInput = { right: null };
 let vrWorldScale = 1;
+let raycaster;
 const isMobileLike = /Mobi|Android|iPhone|iPad|Quest/i.test(navigator.userAgent);
 let performanceMode = isMobileLike ? 'vrSmooth' : 'balanced';
 let starfield;
 const vrZoomConfig = {
   minScale: 0.88,
-  maxScale: 1.45,
+  maxScale: 3.0,
   speed: 0.9
 };
 const vrRotateConfig = {
@@ -38,7 +46,7 @@ const PERFORMANCE_PRESETS = {
   quality: {
     pixelRatioCap: 1.8,
     starCount: 5200,
-    starSize: 0.3,
+    starSize: 0.12,
     starOpacity: 0.95,
     galaxyTextureWidth: 2048,
     galaxyTextureHeight: 1024,
@@ -48,7 +56,7 @@ const PERFORMANCE_PRESETS = {
   balanced: {
     pixelRatioCap: 1.35,
     starCount: 3600,
-    starSize: 0.27,
+    starSize: 0.09,
     starOpacity: 0.93,
     galaxyTextureWidth: 1536,
     galaxyTextureHeight: 768,
@@ -58,7 +66,7 @@ const PERFORMANCE_PRESETS = {
   vrSmooth: {
     pixelRatioCap: 1.0,
     starCount: 2200,
-    starSize: 0.24,
+    starSize: 0.07,
     starOpacity: 0.9,
     galaxyTextureWidth: 1024,
     galaxyTextureHeight: 512,
@@ -69,6 +77,53 @@ const PERFORMANCE_PRESETS = {
 const vrDefaultScale = 1.08;
 const clock = new THREE.Clock();
 let galaxyBackdrop;
+const GREENWICH_TIMEZONE_ID = 'Etc/UTC';
+const TIME_CACHE_TTL_MS = 60 * 1000;
+const timeCache = new Map();
+let activeRegionTimeRequest = 0;
+let cameraTransition = null;
+
+const CITY_TIMEZONE_IDS = {
+  'New York': 'America/New_York',
+  Toronto: 'America/Toronto',
+  'Los Angeles': 'America/Los_Angeles',
+  Vancouver: 'America/Vancouver',
+  'Mexico City': 'America/Mexico_City',
+  Rio: 'America/Sao_Paulo',
+  'São Paulo': 'America/Sao_Paulo',
+  'Buenos Aires': 'America/Argentina/Buenos_Aires',
+  Lima: 'America/Lima',
+  'Bogotá': 'America/Bogota',
+  Bangkok: 'Asia/Bangkok',
+  'Hà Nội': 'Asia/Ho_Chi_Minh',
+  Singapore: 'Asia/Singapore',
+  Jakarta: 'Asia/Jakarta',
+  Manila: 'Asia/Manila',
+  'Kuala Lumpur': 'Asia/Kuala_Lumpur',
+  Yangon: 'Asia/Yangon',
+  'Trung Quốc': 'Asia/Shanghai',
+  Shanghai: 'Asia/Shanghai',
+  'Hong Kong': 'Asia/Hong_Kong',
+  Tokyo: 'Asia/Tokyo',
+  Seoul: 'Asia/Seoul',
+  'Bắc Kinh': 'Asia/Shanghai',
+  Nga: 'Europe/Moscow',
+  Moscow: 'Europe/Moscow',
+  London: 'Europe/London',
+  Paris: 'Europe/Paris',
+  Berlin: 'Europe/Berlin',
+  Rome: 'Europe/Rome',
+  Barcelona: 'Europe/Madrid',
+  Cairo: 'Africa/Cairo',
+  Lagos: 'Africa/Lagos',
+  Johannesburg: 'Africa/Johannesburg',
+  'Cape Town': 'Africa/Johannesburg',
+  Nairobi: 'Africa/Nairobi',
+  Sydney: 'Australia/Sydney',
+  Melbourne: 'Australia/Melbourne',
+  Brisbane: 'Australia/Brisbane',
+  Auckland: 'Pacific/Auckland'
+};
 
 init();
 animate();
@@ -121,6 +176,7 @@ function init() {
   earthGroup = earth.earthGroup;
   earthMesh = earth.earthMesh;
   cloudsMesh = earth.cloudsMesh;
+  coordinatesMesh = earth.coordinatesMesh;
   worldRoot.add(earthGroup);
 
   // Region labels (attach to earthMesh so they rotate with Earth spin)
@@ -131,6 +187,14 @@ function init() {
   const moon = createMoon({ earthRadius: SETTINGS.earthRadius });
   earthGroup.add(moon.moonPivot);
   updateMoon = moon.updateMoon;
+  moonPivotRef = moon.moonPivot;
+  moonMeshRef = moon.moonMesh;
+
+  // Satellite (orbits Earth and continuously faces the planet)
+  const satellite = createSatellite({ earthRadius: SETTINGS.earthRadius });
+  worldRoot.add(satellite.satelliteGroup);
+  updateSatellite = satellite.updateSatellite;
+  satelliteGroupRef = satellite.satelliteGroup;
 
   // Subtle rim light (keep off for stylized/flat by default)
   if (SETTINGS.style === 'realistic' || SETTINGS.style === 'procedural') {
@@ -154,8 +218,8 @@ function init() {
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.target.set(0, 0, 0);
-  controls.minDistance = 2.1;
-  controls.maxDistance = 8.5;
+  controls.minDistance = 1.75;
+  controls.maxDistance = 90;
 
   // VR Controllers
   controller1 = renderer.xr.getController(0);
@@ -168,15 +232,6 @@ function init() {
   controller2.addEventListener('connected', onControllerConnected);
   controller2.addEventListener('disconnected', onControllerDisconnected);
 
-  const controllerLine = new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]),
-    new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 })
-  );
-  controllerLine.name = 'ray';
-  controllerLine.scale.z = 6;
-  controller1.add(controllerLine.clone());
-  controller2.add(controllerLine.clone());
-
   applyPerformanceMode(performanceMode);
 
   // Start with a slightly reduced world scale for a more panoramic first impression in VR.
@@ -188,6 +243,11 @@ function init() {
 
   // Handle window resize
   window.addEventListener('resize', onWindowResize);
+
+  // Raycaster for detecting clicks on regions
+  raycaster = new THREE.Raycaster();
+  document.addEventListener('click', onDocumentClick);
+  document.getElementById('closeRegionInfo').addEventListener('click', closeRegionInfo);
 
   initControlPanel({
     settings: SETTINGS,
@@ -204,18 +264,125 @@ function init() {
     setLabelsEnabled: (enabled) => {
       if (regionsGroup) regionsGroup.visible = enabled;
     },
+    getCoordinatesMapEnabled: () => coordinatesOverlayEnabled,
+    setCoordinatesMapEnabled: (enabled) => {
+      coordinatesOverlayEnabled = enabled;
+      if (coordinatesMesh) coordinatesMesh.visible = enabled;
+    },
     onResetView: () => {
-      worldRoot.rotation.set(0, 0, 0);
-      worldRoot.position.set(0, 0, 0);
-      vrWorldScale = vrDefaultScale;
-      worldRoot.scale.setScalar(vrWorldScale);
-      if (controls) {
-        camera.position.set(0, 0.38, 4.8);
-        controls.target.set(0, 0, 0);
-        controls.update();
-      }
-    }
+      applyCameraPreset('default');
+    },
+    onViewSatellite: () => applyCameraPreset('satellite'),
+    onViewMoon: () => applyCameraPreset('moon'),
+    onViewSun: () => applyCameraPreset('sun')
   });
+
+  if (coordinatesMesh) coordinatesMesh.visible = coordinatesOverlayEnabled;
+}
+
+function startCameraTransition(targetPosition, targetLookAt, durationSec = 0.9, targetFov = camera?.fov ?? 72) {
+  if (!camera || !controls) return;
+
+  cameraTransition = {
+    fromPosition: camera.position.clone(),
+    toPosition: targetPosition.clone(),
+    fromTarget: controls.target.clone(),
+    toTarget: targetLookAt.clone(),
+    fromFov: camera.fov,
+    toFov: targetFov,
+    elapsed: 0,
+    duration: Math.max(0.01, durationSec)
+  };
+}
+
+function setControlDistanceRange(minDistance, maxDistance) {
+  if (!controls) return;
+  controls.minDistance = minDistance;
+  controls.maxDistance = maxDistance;
+}
+
+function setViewObjectVisibility({ sunVisible = true, moonVisible = true, satelliteVisible = true } = {}) {
+  if (sunGroup) sunGroup.visible = sunVisible;
+  if (moonPivotRef) moonPivotRef.visible = moonVisible;
+  if (satelliteGroupRef) satelliteGroupRef.visible = satelliteVisible;
+}
+
+function applyCameraPreset(preset) {
+  if (!camera || !controls || renderer.xr.isPresenting) return;
+
+  setViewObjectVisibility({ sunVisible: true, moonVisible: true, satelliteVisible: true });
+
+  worldRoot.rotation.set(0, 0, 0);
+  worldRoot.position.set(0, 0, 0);
+  vrWorldScale = vrDefaultScale;
+  worldRoot.scale.setScalar(vrWorldScale);
+
+  scene.updateMatrixWorld(true);
+
+  const earthCenter = new THREE.Vector3(0, 0, 0);
+  const r = SETTINGS.earthRadius;
+
+  if (preset === 'default') {
+    setControlDistanceRange(1.75, 24);
+    startCameraTransition(new THREE.Vector3(0, 0.38, 4.8), earthCenter, 0.75, 72);
+    return;
+  }
+
+  if (preset === 'satellite') {
+    setViewObjectVisibility({ sunVisible: true, moonVisible: true, satelliteVisible: false });
+    setControlDistanceRange(1.3, 8);
+    // Approximate low-earth-orbit view: ~6-8% Earth radius above surface.
+    const orbitAltitude = r * 0.18;
+    const distanceFromCenter = r + orbitAltitude;
+    const direction = new THREE.Vector3(0.88, 0.2, 0.43).normalize();
+    const satellitePos = direction.multiplyScalar(distanceFromCenter);
+    startCameraTransition(satellitePos, earthCenter, 0.95, 66);
+    return;
+  }
+
+  if (preset === 'moon' && moonMeshRef) {
+    setViewObjectVisibility({ sunVisible: true, moonVisible: false, satelliteVisible: true });
+    setControlDistanceRange(3.2, 18);
+    const moonWorld = new THREE.Vector3();
+    moonMeshRef.getWorldPosition(moonWorld);
+
+    const moonDirection = moonWorld.clone().normalize();
+    // Place observer on near side of the moon body, facing Earth.
+    const moonObserverPos = moonWorld.clone().sub(moonDirection.multiplyScalar(r * 0.27));
+
+    startCameraTransition(moonObserverPos, earthCenter, 1.05, 56);
+    return;
+  }
+
+  if (preset === 'sun') {
+    setViewObjectVisibility({ sunVisible: false, moonVisible: true, satelliteVisible: true });
+    setControlDistanceRange(20, 150);
+    // Offset sideways so the sun disc does not sit directly in the center of the frame.
+    const sunDir = sunPosition.clone().normalize();
+    const sideAxis = Math.abs(sunDir.y) > 0.85 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+    const sideOffset = new THREE.Vector3().crossVectors(sunDir, sideAxis).normalize().multiplyScalar(18);
+
+    // Keep far enough so Earth appears much smaller than moon/satellite views.
+    const sunObserverPos = sunDir.multiplyScalar(60).add(sideOffset);
+    startCameraTransition(sunObserverPos, earthCenter, 1.1, 26);
+  }
+}
+
+function updateCameraTransition(deltaSeconds) {
+  if (!cameraTransition || !camera || !controls) return;
+
+  cameraTransition.elapsed += deltaSeconds;
+  const t = Math.min(cameraTransition.elapsed / cameraTransition.duration, 1);
+  const eased = 1 - Math.pow(1 - t, 3);
+
+  camera.position.lerpVectors(cameraTransition.fromPosition, cameraTransition.toPosition, eased);
+  controls.target.lerpVectors(cameraTransition.fromTarget, cameraTransition.toTarget, eased);
+  camera.fov = THREE.MathUtils.lerp(cameraTransition.fromFov, cameraTransition.toFov, eased);
+  camera.updateProjectionMatrix();
+
+  if (t >= 1) {
+    cameraTransition = null;
+  }
 }
 
 function disposeObject3D(object) {
@@ -267,6 +434,10 @@ function rebuildSpaceEnvironment() {
       opacity: preset.starOpacity
     });
     worldRoot.add(starfield);
+  }
+
+  if (coordinatesMesh) {
+    coordinatesMesh.visible = coordinatesOverlayEnabled;
   }
 }
 
@@ -360,6 +531,190 @@ function onWindowResize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
+function onDocumentClick(event) {
+  // Skip if mouse is over UI elements
+  if (event.target.closest('#panel') || event.target.closest('#regionInfo') !== null) {
+    return;
+  }
+
+  // Calculate mouse position in normalized device coordinates
+  const rect = renderer.domElement.getBoundingClientRect();
+  const mouse = new THREE.Vector2(
+    ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    -((event.clientY - rect.top) / rect.height) * 2 + 1
+  );
+
+  // Update raycaster
+  raycaster.setFromCamera(mouse, camera);
+
+  // Check for intersection with regions group
+  const intersects = raycaster.intersectObject(regionsGroup, true);
+  
+  if (intersects.length > 0) {
+    let foundRegion = null;
+    
+    // Find both label and marker, prefer label
+    for (let i = 0; i < intersects.length; i++) {
+      const obj = intersects[i].object;
+      if (obj.userData?.name && !obj.userData?.isRegion) {
+        if (obj.userData.type === 'label') {
+          foundRegion = obj.userData;
+          break; // Found label, use it
+        } else if (obj.userData.type === 'marker' && !foundRegion) {
+          foundRegion = obj.userData;
+        }
+      }
+    }
+
+    if (foundRegion) {
+      showRegionInfo(foundRegion, {
+        x: event.clientX,
+        y: event.clientY
+      });
+      return;
+    }
+  }
+  
+  closeRegionInfo();
+}
+
+function resolveTimeZoneId(region) {
+  return CITY_TIMEZONE_IDS[region.name] || null;
+}
+
+function formatTimeFromApiResponse(data) {
+  if (!data) return null;
+
+  if (data.time) {
+    return data.time;
+  }
+
+  if (data.dateTime) {
+    const parsed = new Date(data.dateTime);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toLocaleTimeString('vi-VN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      });
+    }
+  }
+
+  return null;
+}
+
+async function fetchCurrentTimeByZone(timeZoneId) {
+  const now = Date.now();
+  const cached = timeCache.get(timeZoneId);
+  if (cached && now - cached.timestamp < TIME_CACHE_TTL_MS) {
+    return cached.value;
+  }
+
+  const url = `https://timeapi.io/api/Time/current/zone?timeZone=${encodeURIComponent(timeZoneId)}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Time API error: ${response.status}`);
+  }
+
+  const payload = await response.json();
+  const timeText = formatTimeFromApiResponse(payload);
+  if (!timeText) {
+    throw new Error('Invalid time payload');
+  }
+
+  const value = {
+    time: timeText,
+    date: payload.date || ''
+  };
+
+  timeCache.set(timeZoneId, {
+    timestamp: now,
+    value
+  });
+
+  return value;
+}
+
+async function updateRegionTimes(region, requestId) {
+  const cityTimeEl = document.getElementById('regionCurrentTime');
+  const utcTimeEl = document.getElementById('regionUtcTime');
+  const timezoneEl = document.getElementById('regionTimezone');
+  const timeZoneId = resolveTimeZoneId(region);
+
+  if (!timeZoneId) {
+    cityTimeEl.textContent = 'Không có dữ liệu';
+    utcTimeEl.textContent = 'Không có dữ liệu';
+    return;
+  }
+
+  timezoneEl.textContent = `${region.timezone || 'N/A'} (${timeZoneId})`;
+  cityTimeEl.textContent = 'Đang tải...';
+  utcTimeEl.textContent = 'Đang tải...';
+
+  try {
+    const [cityTimeData, utcTimeData] = await Promise.all([
+      fetchCurrentTimeByZone(timeZoneId),
+      fetchCurrentTimeByZone(GREENWICH_TIMEZONE_ID)
+    ]);
+
+    if (requestId !== activeRegionTimeRequest) return;
+
+    cityTimeEl.textContent = cityTimeData.time;
+    utcTimeEl.textContent = utcTimeData.time;
+  } catch (error) {
+    if (requestId !== activeRegionTimeRequest) return;
+    cityTimeEl.textContent = 'Lỗi tải giờ';
+    utcTimeEl.textContent = 'Lỗi tải giờ';
+  }
+}
+
+function showRegionInfo(region, clickPoint) {
+  const panel = document.getElementById('regionInfo');
+  document.getElementById('regionName').textContent = region.name;
+  document.getElementById('regionLat').textContent = `${region.lat.toFixed(2)}°`;
+  document.getElementById('regionLon').textContent = `${region.lon.toFixed(2)}°`;
+  document.getElementById('regionTimezone').textContent = region.timezone || 'N/A';
+
+  // Anchor panel to click point: always prioritize right side and stay near city label.
+  const panelWidth = 320;
+  const panelHeight = 160;
+  const margin = 10;
+  const offsetRight = 14;
+
+  const baseX = clickPoint?.x ?? window.innerWidth * 0.5;
+  const baseY = clickPoint?.y ?? window.innerHeight * 0.5;
+
+  let finalX = baseX + offsetRight;
+  let finalY = baseY - panelHeight * 0.5;
+
+  // Keep right placement whenever possible; if impossible, pin to right viewport boundary.
+  if (finalX + panelWidth > window.innerWidth - margin) {
+    finalX = window.innerWidth - panelWidth - margin;
+  }
+
+  if (finalY < margin) {
+    finalY = margin;
+  }
+  if (finalY + panelHeight > window.innerHeight - margin) {
+    finalY = window.innerHeight - panelHeight - margin;
+  }
+
+  panel.style.left = `${Math.max(margin, finalX)}px`;
+  panel.style.top = `${finalY}px`;
+  
+  panel.classList.remove('hidden');
+
+  activeRegionTimeRequest += 1;
+  const requestId = activeRegionTimeRequest;
+  updateRegionTimes(region, requestId);
+}
+
+function closeRegionInfo() {
+  const panel = document.getElementById('regionInfo');
+  panel.classList.add('hidden');
+}
+
 function animate() {
   renderer.setAnimationLoop(render);
 }
@@ -371,8 +726,9 @@ function render() {
   earthMesh.rotation.y += SETTINGS.earthSpin;
   if (cloudsMesh && cloudsMesh.visible) cloudsMesh.rotation.y += SETTINGS.cloudsSpin;
   if (updateMoon) updateMoon();
+  if (updateSatellite) updateSatellite();
 
-  // Enable/disable OrbitControls depending on XR
+  // Enable/disable OrbitControls depending on XR and map mode
   const presenting = renderer.xr.isPresenting;
   if (controls) {
     controls.enabled = !presenting;
@@ -381,6 +737,10 @@ function render() {
 
   if (presenting) {
     updateVRMovement(deltaSeconds);
+  }
+
+  if (!presenting) {
+    updateCameraTransition(deltaSeconds);
   }
 
   // Update region labels to face camera

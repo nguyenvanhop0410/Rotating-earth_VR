@@ -15,6 +15,9 @@ export function createEarth({ settings, sunDirection = new THREE.Vector3(30, 0.5
   });
   earthMesh.add(cityLightsLayer.mesh);
 
+  const coordinatesLayer = createCoordinatesLayer({ earthRadius: settings.earthRadius });
+  earthMesh.add(coordinatesLayer.mesh);
+
   // Optional realism textures (if present / reachable)
   if (settings.enableRealTextures && settings.style === 'realistic') {
     loadEarthTextures(settings.textures)
@@ -78,7 +81,99 @@ export function createEarth({ settings, sunDirection = new THREE.Vector3(30, 0.5
   // Keep Earth centered for space view
   earthGroup.position.y = 0;
 
-  return { earthGroup, earthMesh, cloudsMesh, atmosphereMesh, axisMesh, cityLightsMesh: cityLightsLayer.mesh };
+  return {
+    earthGroup,
+    earthMesh,
+    cloudsMesh,
+    atmosphereMesh,
+    axisMesh,
+    cityLightsMesh: cityLightsLayer.mesh,
+    coordinatesMesh: coordinatesLayer.mesh
+  };
+}
+
+function createCoordinatesLayer({ earthRadius }) {
+  const tex = createCoordinatesTexture({ width: 2048, height: 1024 });
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.anisotropy = 8;
+
+  const geometry = new THREE.SphereGeometry(earthRadius * 1.016, 192, 140);
+  const material = new THREE.MeshBasicMaterial({
+    map: tex,
+    transparent: true,
+    opacity: 0.96,
+    depthWrite: false
+  });
+
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.visible = false;
+  mesh.renderOrder = 10;
+
+  return { mesh };
+}
+
+function createCoordinatesTexture({ width, height }) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+
+  if (!ctx) return new THREE.CanvasTexture(canvas);
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.lineCap = 'round';
+
+  for (let lat = -80; lat <= 80; lat += 10) {
+    const y = ((90 - lat) / 180) * height;
+    const major = lat % 30 === 0;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.lineWidth = major ? 2.2 : 1.1;
+    ctx.strokeStyle = major ? 'rgba(188, 226, 255, 0.7)' : 'rgba(166, 206, 236, 0.38)';
+    ctx.stroke();
+  }
+
+  for (let lon = -180; lon <= 180; lon += 10) {
+    const x = ((lon + 180) / 360) * width;
+    const major = lon % 30 === 0;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
+    ctx.lineWidth = major ? 2.2 : 1.1;
+    ctx.strokeStyle = major ? 'rgba(188, 226, 255, 0.7)' : 'rgba(166, 206, 236, 0.38)';
+    ctx.stroke();
+  }
+
+  // Prime meridian and equator for clear orientation.
+  const primeMeridianX = width * 0.5;
+  ctx.beginPath();
+  ctx.moveTo(primeMeridianX, 0);
+  ctx.lineTo(primeMeridianX, height);
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(255, 219, 89, 0.92)';
+  ctx.stroke();
+
+  const equatorY = height * 0.5;
+  ctx.beginPath();
+  ctx.moveTo(0, equatorY);
+  ctx.lineTo(width, equatorY);
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(255, 117, 117, 0.92)';
+  ctx.stroke();
+
+  ctx.font = '600 34px Sora, Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(255, 117, 117, 0.95)';
+  ctx.fillText('Xich dao 0°', width * 0.18, equatorY - 24);
+
+  ctx.fillStyle = 'rgba(255, 219, 89, 0.95)';
+  ctx.fillText('Kinh tuyen goc 0°', primeMeridianX + 170, height * 0.12);
+
+  return new THREE.CanvasTexture(canvas);
 }
 
 function createCityLightsLayer({ earthRadius, sunDirection, nightTexture = null }) {

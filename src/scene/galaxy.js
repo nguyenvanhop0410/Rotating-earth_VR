@@ -154,20 +154,6 @@ function createGalaxyTexture({ width, height, seed, sunDir, sunHoleDeg = 18 }) {
         b += w * band * 0.18;
       }
 
-      // Sprinkle tiny stars (background texture only)
-      const s = rand();
-      if (sunHole < 0.02 && s > 0.9982) {
-        const mag = (s - 0.9982) / (1 - 0.9982);
-        const intensity = 0.35 + 0.65 * mag;
-        const tint = rand();
-        const sr = intensity * (0.95 + 0.10 * tint);
-        const sg = intensity * (0.95 + 0.05 * tint);
-        const sb = intensity * (1.00 + 0.20 * tint);
-        r += sr;
-        g += sg;
-        b += sb;
-      }
-
       r = clamp01(r);
       g = clamp01(g);
       b = clamp01(b);
