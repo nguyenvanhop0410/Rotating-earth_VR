@@ -521,10 +521,12 @@ async function loadEarthTextures(paths) {
     loadTexture(paths.normal),
     loadTexture(paths.roughness),
     loadTexture(paths.specular),
+    loadTexture(paths.bump),
+    loadTexture(paths.seaIce),
     loadTexture(paths.night)
   ]);
 
-  const [day, normal, roughness, specular, night] = results.map((r) => (r.status === 'fulfilled' ? r.value : null));
+  const [day, normal, roughness, specular, bump, seaIce, night] = results.map((r) => (r.status === 'fulfilled' ? r.value : null));
   if (day) {
     day.colorSpace = THREE.SRGBColorSpace;
     day.wrapS = THREE.RepeatWrapping;
@@ -533,7 +535,7 @@ async function loadEarthTextures(paths) {
   }
 
   // non-color maps
-  for (const tex of [normal, roughness, specular]) {
+  for (const tex of [normal, roughness, specular, bump, seaIce]) {
     if (!tex) continue;
     tex.colorSpace = THREE.NoColorSpace;
     tex.wrapS = THREE.RepeatWrapping;
@@ -548,39 +550,45 @@ async function loadEarthTextures(paths) {
     night.anisotropy = 8;
   }
 
-  return { day, normal, roughness, specular, night };
+  return { day, normal, roughness, specular, bump, seaIce, night };
 }
 
 function createRealEarthMaterial(maps) {
-  const clearOceanDayMap = maps.day ? createClearOceanDayMap(maps.day) : null;
+  const clearOceanDayMap = maps.day
+    ? createEnhancedEarthDayMap(maps.day, maps.specular, maps.seaIce)
+    : null;
+  const landBumpMap = maps.bump && maps.specular
+    ? createLandOnlyBumpMap(maps.bump, maps.specular, maps.seaIce)
+    : null;
+  const oceanRoughnessMap = maps.specular
+    ? createOceanRoughnessMap(maps.specular, maps.seaIce)
+    : null;
 
   const material = new THREE.MeshStandardMaterial({
     map: clearOceanDayMap ?? maps.day ?? null,
-    normalMap: null,
-    roughness: 0.96,
+    normalMap: maps.normal ?? null,
+    normalScale: maps.normal ? new THREE.Vector2(0.42, 0.42) : new THREE.Vector2(1, 1),
+    bumpMap: landBumpMap,
+    bumpScale: landBumpMap ? 0.038 : 0,
+    roughnessMap: oceanRoughnessMap,
+    roughness: 0.92,
     metalness: 0.0
   });
 
-  // Slight cool tint to make oceans feel clearer without washing out land.
-  material.color = new THREE.Color(0xf2f8ff);
-  material.toneMapped = false;
+  // Keep oceans reflective and land comparatively matte without sinking geometry.
+  material.color = new THREE.Color(0xf6fbff);
+  material.envMapIntensity = 0.65;
 
   return material;
 }
 
-function createClearOceanDayMap(sourceTexture) {
-  const sourceImage = sourceTexture?.image;
-  if (!sourceImage || !sourceImage.width || !sourceImage.height) return sourceTexture;
+function createEnhancedEarthDayMap(dayTexture, specularTexture, seaIceTexture) {
+  const sourceImage = dayTexture?.image;
+  if (!sourceImage || !sourceImage.width || !sourceImage.height) return dayTexture;
 
-  const canvas = document.createElement('canvas');
-  canvas.width = sourceImage.width;
-  canvas.height = sourceImage.height;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(sourceImage, 0, 0);
-
-  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const data = img.data;
-
+  const { canvas, ctx, img, data } = createEditableTextureCanvas(sourceImage);
+  const specData = getComparableImageData(specularTexture, canvas.width, canvas.height);
+  const iceData = getComparableImageData(seaIceTexture, canvas.width, canvas.height);
   const clamp255 = (v) => Math.max(0, Math.min(255, v));
   const lerp = (a, b, t) => a + (b - a) * t;
 
@@ -589,26 +597,26 @@ function createClearOceanDayMap(sourceTexture) {
     let g = data[i + 1];
     let b = data[i + 2];
 
-    // Increase global clarity slightly.
-    const contrast = 1.08;
+    const spec = specData ? specData[i] / 255 : 0;
+    const ice = iceData ? iceData[i] / 255 : 0;
+    const oceanMask = THREE.MathUtils.clamp(spec, 0, 1);
+
+    const contrast = 1.06;
     r = ((r / 255 - 0.5) * contrast + 0.5) * 255;
     g = ((g / 255 - 0.5) * contrast + 0.5) * 255;
     b = ((b / 255 - 0.5) * contrast + 0.5) * 255;
 
-    // Strong ocean detection to affect open sea, not only coastal pixels.
-    const maxRG = Math.max(r, g);
-    const oceanSignal = b - maxRG * 0.86;
-    const brightMask = 1.0 - Math.max(0, Math.min(1, (Math.max(r, Math.max(g, b)) - 220) / 30));
-    const oceanMask = Math.max(0, Math.min(1, (oceanSignal + 24) / 72)) * brightMask;
+    // Deepen and enrich oceans using the specular mask.
+    const oceanStrength = oceanMask * 0.6;
+    r = lerp(r, 28, oceanStrength);
+    g = lerp(g, 102, oceanStrength);
+    b = lerp(b, 196, oceanStrength);
 
-    // Push ocean toward a clear deep-sea blue.
-    const targetR = 38;
-    const targetG = 112;
-    const targetB = 222;
-    const oceanStrength = 0.682 * oceanMask;
-    r = lerp(r, targetR, oceanStrength);
-    g = lerp(g, targetG, oceanStrength);
-    b = lerp(b, targetB, oceanStrength);
+    // Add bright, cold sea ice without changing geometry height.
+    const iceStrength = THREE.MathUtils.clamp(ice, 0, 1) * 0.9;
+    r = lerp(r, 236, iceStrength);
+    g = lerp(g, 244, iceStrength);
+    b = lerp(b, 250, iceStrength);
 
     data[i + 0] = clamp255(r);
     data[i + 1] = clamp255(g);
@@ -619,12 +627,109 @@ function createClearOceanDayMap(sourceTexture) {
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = sourceTexture.wrapS;
-  tex.wrapT = sourceTexture.wrapT;
-  tex.anisotropy = sourceTexture.anisotropy;
+  tex.wrapS = dayTexture.wrapS;
+  tex.wrapT = dayTexture.wrapT;
+  tex.anisotropy = dayTexture.anisotropy;
   tex.generateMipmaps = true;
 
   return tex;
+}
+
+function createLandOnlyBumpMap(bumpTexture, specularTexture, seaIceTexture) {
+  const sourceImage = bumpTexture?.image;
+  if (!sourceImage || !sourceImage.width || !sourceImage.height) return bumpTexture;
+
+  const { canvas, ctx, img, data } = createEditableTextureCanvas(sourceImage);
+  const specData = getComparableImageData(specularTexture, canvas.width, canvas.height);
+  const iceData = getComparableImageData(seaIceTexture, canvas.width, canvas.height);
+
+  for (let i = 0; i < data.length; i += 4) {
+    const base = data[i] / 255;
+    const landMask = specData ? (1 - specData[i] / 255) : 1;
+    const iceMask = iceData ? iceData[i] / 255 : 0;
+    const emphasizedLand = Math.pow(base, 1.28);
+    const landRelief = Math.round(emphasizedLand * 255 * landMask);
+    const iceRelief = Math.round(iceMask * 18);
+    const value = Math.max(0, Math.min(255, landRelief + iceRelief));
+
+    data[i + 0] = value;
+    data[i + 1] = value;
+    data[i + 2] = value;
+    data[i + 3] = 255;
+  }
+
+  ctx.putImageData(img, 0, 0);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.wrapS = bumpTexture.wrapS;
+  tex.wrapT = bumpTexture.wrapT;
+  tex.anisotropy = bumpTexture.anisotropy;
+  tex.generateMipmaps = true;
+
+  return tex;
+}
+
+function createOceanRoughnessMap(specularTexture, seaIceTexture) {
+  const sourceImage = specularTexture?.image;
+  if (!sourceImage || !sourceImage.width || !sourceImage.height) return null;
+
+  const { canvas, ctx, img, data } = createEditableTextureCanvas(sourceImage);
+  const iceData = getComparableImageData(seaIceTexture, canvas.width, canvas.height);
+
+  for (let i = 0; i < data.length; i += 4) {
+    const oceanMask = data[i] / 255;
+    const iceMask = iceData ? iceData[i] / 255 : 0;
+    const roughnessValue = Math.round(
+      THREE.MathUtils.lerp(
+        214,
+        54,
+        oceanMask * (1 - iceMask * 0.5)
+      ) + iceMask * 34
+    );
+
+    data[i + 0] = roughnessValue;
+    data[i + 1] = roughnessValue;
+    data[i + 2] = roughnessValue;
+    data[i + 3] = 255;
+  }
+
+  ctx.putImageData(img, 0, 0);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.wrapS = specularTexture.wrapS;
+  tex.wrapT = specularTexture.wrapT;
+  tex.anisotropy = specularTexture.anisotropy;
+  tex.generateMipmaps = true;
+
+  return tex;
+}
+
+function createEditableTextureCanvas(sourceImage) {
+  const canvas = document.createElement('canvas');
+  canvas.width = sourceImage.width;
+  canvas.height = sourceImage.height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(sourceImage, 0, 0);
+
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = img.data;
+
+  return { canvas, ctx, img, data };
+}
+
+function getComparableImageData(texture, width, height) {
+  const image = texture?.image;
+  if (!image) return null;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(image, 0, 0, width, height);
+
+  return ctx.getImageData(0, 0, width, height).data;
 }
 
 function createAtmosphereMesh(radius) {
