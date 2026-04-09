@@ -28,15 +28,6 @@ let moonMeshRef;
 let controller1, controller2;
 let worldRoot;
 let vrInput = { right: null };
-let vrGrabState = {
-  active: false,
-  controller: null,
-  startControllerPosition: new THREE.Vector3(),
-  startWorldPosition: new THREE.Vector3()
-};
-let vrPointerState = {
-  hoveredRegion: null
-};
 let vrWorldScale = 1;
 let raycaster;
 const isMobileLike = /Mobi|Android|iPhone|iPad|Quest/i.test(navigator.userAgent);
@@ -59,6 +50,8 @@ const vrRayConfig = {
   idleLength: 8,
   targetLength: 10
 };
+const _tmpControllerMatrix = new THREE.Matrix4();
+const _tmpControllerDirection = new THREE.Vector3();
 const PERFORMANCE_PRESETS = {
   quality: {
     pixelRatioCap: 1.8,
@@ -157,8 +150,8 @@ function init() {
   if (infoEl) {
     infoEl.innerHTML = [
       'Realistic Earth (Space Scene)',
-      'VR tay phải: Thumbstick Y = zoom, Thumbstick X = xoay, Grip = kéo thế giới',
-      'Trigger vào thủ đô để xem thông tin, Trigger vào khoảng trống để mở hoặc ẩn bảng điều khiển'
+      'VR tay phải: Thumbstick Y = zoom, Thumbstick X = xoay Trái Đất',
+      'Trigger hoặc Grip: chỉ dùng để mở bảng điều khiển'
     ].join('<br>');
   }
 
@@ -271,8 +264,7 @@ function init() {
 
   // VR Button
   document.body.appendChild(VRButton.createButton(renderer, {
-    optionalFeatures: ['local-floor', 'dom-overlay'],
-    domOverlay: { root: document.body }
+    optionalFeatures: ['local-floor']
   }));
 
   // Handle window resize
@@ -336,8 +328,6 @@ function startCameraTransition(targetPosition, targetLookAt, durationSec = 0.9, 
 function resetVRWorldTransform() {
   if (!worldRoot) return;
 
-  vrGrabState.active = false;
-  vrGrabState.controller = null;
   worldRoot.position.set(0, 0, vrDefaultDistance);
   worldRoot.rotation.set(0, 0, 0);
   vrWorldScale = vrDefaultScale;
@@ -348,7 +338,6 @@ function onXRSessionStart() {
   resetVRWorldTransform();
   setPanelVisibility(false);
   closeRegionInfo();
-  vrPointerState.hoveredRegion = null;
   setControllerRayAppearance(controller1, false);
   setControllerRayAppearance(controller2, false);
 }
@@ -357,7 +346,6 @@ function onXRSessionEnd() {
   setPanelVisibility(true);
   closeRegionInfo();
   vrInput.right = null;
-  vrPointerState.hoveredRegion = null;
   setControllerRayAppearance(controller1, false);
   setControllerRayAppearance(controller2, false);
 }
@@ -381,10 +369,6 @@ function setPanelVisibility(visible) {
   if (!panel) return;
 
   panel.classList.toggle('is-hidden', !visible);
-  if (visible) {
-    vrGrabState.active = false;
-    vrGrabState.controller = null;
-  }
   syncPanelToggleButton();
 }
 
@@ -559,33 +543,19 @@ function onControllerDisconnected(event) {
   controller.userData.inputSource = null;
   controller.userData.handedness = '';
   vrInput.right = null;
-  if (vrPointerState.hoveredRegion) {
-    vrPointerState.hoveredRegion = null;
-  }
   setControllerRayAppearance(controller, false);
-  if (vrGrabState.controller === controller) {
-    vrGrabState.active = false;
-    vrGrabState.controller = null;
-  }
 }
 
 function onControllerGrabStart(event) {
-  if (!renderer.xr.isPresenting || !worldRoot) return;
+  void event;
+  if (!renderer.xr.isPresenting) return;
 
-  const controller = event.target;
-  setPanelVisibility(false);
-  controller.getWorldPosition(vrGrabState.startControllerPosition);
-  vrGrabState.startWorldPosition.copy(worldRoot.position);
-  vrGrabState.controller = controller;
-  vrGrabState.active = true;
+  closeRegionInfo();
+  setPanelVisibility(true);
 }
 
 function onControllerGrabEnd(event) {
-  const controller = event.target;
-  if (vrGrabState.controller === controller) {
-    vrGrabState.active = false;
-    vrGrabState.controller = null;
-  }
+  void event;
 }
 
 function addControllerRay(controller) {
@@ -605,7 +575,7 @@ function addControllerRay(controller) {
 }
 
 function onControllerSelectStart(event) {
-  if (!renderer.xr.isPresenting || !regionsGroup) return;
+  if (!renderer.xr.isPresenting) return;
 
   const controller = event.target;
   const region = getSelectableRegionFromController(controller);
@@ -617,7 +587,6 @@ function onControllerSelectStart(event) {
   }
 
   closeRegionInfo();
-  togglePanelVisibility();
 }
 
 function onControllerSelectEnd(event) {
@@ -667,11 +636,25 @@ function updateVRInputSources() {
 function getSelectableRegionFromController(controller) {
   if (!controller || !regionsGroup) return null;
 
-  raycaster.setFromXRController(controller);
+  setRaycasterFromController(controller);
   const region = getRegionAtRay(raycaster, regionsGroup);
   if (!region || region.isRegion) return null;
 
   return region;
+}
+
+function setRaycasterFromController(controller) {
+  if (!controller || !raycaster) return;
+
+  if (typeof raycaster.setFromXRController === 'function') {
+    raycaster.setFromXRController(controller);
+    return;
+  }
+
+  _tmpControllerMatrix.identity().extractRotation(controller.matrixWorld);
+  raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+  _tmpControllerDirection.set(0, 0, -1).applyMatrix4(_tmpControllerMatrix);
+  raycaster.ray.direction.copy(_tmpControllerDirection.normalize());
 }
 
 function setControllerRayAppearance(controller, isTargetingRegion) {
@@ -684,30 +667,11 @@ function setControllerRayAppearance(controller, isTargetingRegion) {
   ray.scale.z = isTargetingRegion ? vrRayConfig.targetLength : vrRayConfig.idleLength;
 }
 
-function updateVRPointerState() {
-  const rightController = getRightController();
-  const hoveredRegion = getSelectableRegionFromController(rightController);
-  vrPointerState.hoveredRegion = hoveredRegion;
-  setControllerRayAppearance(rightController, !!hoveredRegion);
-
-  const otherController = rightController === controller1 ? controller2 : controller1;
-  setControllerRayAppearance(otherController, false);
-}
-
 function updateVRMovement(deltaSeconds) {
   if (!renderer.xr.isPresenting || !worldRoot) return;
 
-  updateVRPointerState();
-
   if (isPanelVisible()) {
     vrInput.right = null;
-    return;
-  }
-
-  if (vrGrabState.active && vrGrabState.controller) {
-    vrGrabState.controller.getWorldPosition(vrGrabState.startControllerPosition);
-    const dragOffset = vrGrabState.startControllerPosition.clone().sub(vrGrabState.startWorldPosition);
-    worldRoot.position.copy(vrGrabState.startWorldPosition).add(dragOffset);
     return;
   }
 
