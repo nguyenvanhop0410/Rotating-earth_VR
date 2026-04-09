@@ -92,6 +92,25 @@ export function createRegionLabels({ earthRadius = 1.2 } = {}) {
         position: surfacePos, 
         type: 'marker'
       };
+
+      // Add a larger transparent collider so VR controller raycasts are easier to hit.
+      const hitGeometry = new THREE.SphereGeometry(0.07, 10, 10);
+      const hitMaterial = new THREE.MeshBasicMaterial({
+        color: region.color,
+        transparent: true,
+        opacity: 0.02,
+        depthWrite: false,
+        fog: false
+      });
+      const hitTarget = new THREE.Mesh(hitGeometry, hitMaterial);
+      hitTarget.position.copy(labelPos);
+      hitTarget.name = 'hitTarget';
+      hitTarget.userData = {
+        ...region,
+        position: labelPos,
+        type: 'hitTarget'
+      };
+      regionsGroup.add(hitTarget);
     }
 
     const labelSprite = createSimpleTextLabel(region.name, region.color);

@@ -578,6 +578,8 @@ function onControllerSelectStart(event) {
   if (!renderer.xr.isPresenting) return;
 
   const controller = event.target;
+  controller.updateMatrixWorld(true);
+  scene.updateMatrixWorld(true);
   const region = getSelectableRegionFromController(controller);
 
   if (region) {
