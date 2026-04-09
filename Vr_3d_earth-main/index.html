@@ -1,0 +1,1191 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Earth VR — Mô phỏng Trái Đất 3D với Mặt Trời</title>
+  <link rel="stylesheet" href="./src/style.css" />
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170/build/three.module.js",
+      "jsm/":  "https://cdn.jsdelivr.net/npm/three@0.170/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+
+  <div id="loader">
+    <div class="loader-ring"></div>
+    <div class="loader-label">Đang tải dữ liệu vệ tinh…</div>
+  </div>
+
+  <div id="hud-tl">
+    <div class="hud-frame">
+      <div class="c c-tl"></div><div class="c c-tr"></div>
+      <div class="c c-bl"></div><div class="c c-br"></div>
+      <div class="hud-title">Earth</div>
+      <div class="hud-sub">VR · WebXR · Simulation 3D</div>
+    </div>
+  </div>
+
+  <div id="data-panel">
+    <div class="c c-tl"></div><div class="c c-tr"></div>
+    <div class="c c-bl"></div><div class="c c-br"></div>
+    <div class="panel-title">Telemetry</div>
+    <div class="d-row"><span class="d-key" id="k-radius">Bán kính</span><span class="d-val" id="v-radius">6,371 km</span></div>
+    <div class="d-row"><span class="d-key" id="k-mass">Khối lượng</span><span class="d-val" id="v-mass">5.97×10²⁴ kg</span></div>
+    <div class="d-row"><span class="d-key" id="k-tilt">Nghiêng trục</span><span class="d-val" id="v-tilt">23.4°</span></div>
+    <div class="d-row"><span class="d-key" id="k-spin">Vận tốc tự quay</span><span class="d-val" id="v-spin">1,670 km/h</span></div>
+    <div class="d-row"><span class="d-key" id="k-orbit">Vận tốc quỹ đạo</span><span class="d-val" id="v-orbit">29.8 km/s</span></div>
+    <div class="divider"></div>
+    <div class="d-row"><span class="d-key">Độ cao quan sát</span><span class="d-val live" id="v-dist">—</span></div>
+    <div class="d-row"><span class="d-key">Góc kinh tuyến</span><span class="d-val live" id="v-lon">—</span></div>
+    <div class="d-row"><span class="d-key">ISS orbit</span><span class="d-val live" id="v-iss">—</span></div>
+    <div class="d-row"><span class="d-key">Góc nhìn</span><span class="d-val live" id="v-body">Trái Đất</span></div>
+  </div>
+
+  <div id="toggles">
+    <button class="tbtn on" id="t-clouds">Mây</button>
+    <button class="tbtn on" id="t-atm">Khí quyển</button>
+    <button class="tbtn on" id="t-night">Đêm</button>
+    <button class="tbtn on" id="t-planets">Hành tinh khác</button>
+    <button class="tbtn" id="t-aurora">Aurora</button>
+    <button class="tbtn on" id="t-iss">ISS</button>
+    <button class="tbtn on" id="t-stars">Sao</button>
+    <button class="tbtn on" id="t-grid">Lưới</button>
+    <button class="tbtn wide" id="t-layers">Lớp vỏ Trái Đất</button>
+    <button class="tbtn" id="t-auto">Camera tự quay</button>
+    <button class="tbtn" id="t-pause">Dừng quay</button>
+    <button class="tbtn wide" id="t-realtime">Ngày/đêm realtime</button>
+    <button class="tbtn wide" id="t-speed">Tốc độ x1.0</button>
+    <button class="tbtn wide" id="t-preset">Preset: Quỹ đạo gần</button>
+  </div>
+
+  <div id="pick-popup" aria-live="polite"></div>
+
+  <div id="hint">
+    <div class="hint-text">Chuột: xoay · Scroll: zoom · Nút bên trái: tuỳ chỉnh · Enter VR: góc nhìn 360°</div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'jsm/controls/OrbitControls.js';
+    import { VRButton } from 'jsm/webxr/VRButton.js';
+    import { createTelemetryUpdater } from './src/planetTelemetry.js';
+
+    /* ─────────────────────────────────────────
+       RENDERER
+    ───────────────────────────────────────── */
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.2;
+    renderer.xr.enabled = true;
+    document.body.prepend(renderer.domElement);
+    document.body.appendChild(VRButton.createButton(renderer, { optionalFeatures: ['local-floor'] }));
+
+    /* ─────────────────────────────────────────
+       SCENE / CAMERA
+    ───────────────────────────────────────── */
+    const scene = new THREE.Scene();
+
+    const camera = new THREE.PerspectiveCamera(48, innerWidth / innerHeight, 0.01, 700);
+    camera.position.set(0, 14, 56);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.055;
+    controls.enablePan = false;
+    controls.minDistance = 4;
+    controls.maxDistance = 320;
+    controls.autoRotateSpeed = 0.35;
+
+    /* ─────────────────────────────────────────
+       LIGHTING  — simulates distant Sun
+    ───────────────────────────────────────── */
+    // Nguồn sáng mặt trời: toả sáng ra toàn hệ.
+    const sunLight = new THREE.PointLight(0xfff4d6, 9000, 1200, 2);
+    sunLight.position.set(0, 0, 0);
+    scene.add(sunLight);
+
+    // Ambient: deep space scatter — keep it low for dark-side drama
+    const ambLight = new THREE.AmbientLight(0x0a1220, 0.35);
+    scene.add(ambLight);
+
+    // Subtle blue-side fill (reflected moonlight / earthshine)
+    const fillLight = new THREE.DirectionalLight(0x1b2f4a, 0.12);
+    fillLight.position.set(-7, -2, -5);
+    scene.add(fillLight);
+
+    const R = 2; // Earth radius (scene units)
+
+    /* ─────────────────────────────────────────
+       GLOBE GROUP — tilted 23.4°
+    ───────────────────────────────────────── */
+    const globe = new THREE.Group();
+    globe.rotation.z = THREE.MathUtils.degToRad(23.4);
+    scene.add(globe);
+
+    const AU_SCALE = 28;
+    const orbitRadiusFromAU = (au) => Math.pow(au, 0.62) * AU_SCALE;
+
+    const tl = new THREE.TextureLoader();
+    const BASE = 'https://threejs.org/examples/textures/planets/';
+    const IMG = './Img/';
+    const clickableBodies = [];
+
+    /* ── Earth surface ── */
+    const earthMat = new THREE.MeshPhongMaterial({
+      color: 0xffffff,
+      shininess: 38,
+      specular: new THREE.Color(0x3a70a8),
+    });
+
+    // 4 Earth + Sun + 7 planets + Moon + Saturn ring + star sky
+    let totalTextures = 15;
+    let loadedCount = 0;
+    let loaderHidden = false;
+
+    function hideLoader() {
+      if (loaderHidden) return;
+      loaderHidden = true;
+      const el = document.getElementById('loader');
+      if (!el) return;
+      el.classList.add('fade');
+      setTimeout(() => el.remove(), 900);
+    }
+
+    function onLoad() {
+      if (++loadedCount >= totalTextures) {
+        setTimeout(hideLoader, 300);
+      }
+    }
+
+    // Failsafe: tránh kẹt màn hình loading nếu có texture lỗi mạng/đường dẫn.
+    setTimeout(hideLoader, 12000);
+
+    tl.load(IMG + 'earth_daymap.jpg', t => {
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      earthMat.map = t; earthMat.needsUpdate = true; onLoad();
+    });
+    tl.load(BASE + 'earth_normal_2048.jpg', t => {
+      t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      earthMat.normalMap = t;
+      earthMat.normalScale = new THREE.Vector2(0.52, 0.52);
+      earthMat.needsUpdate = true; onLoad();
+    }, undefined, () => onLoad());
+    tl.load(BASE + 'earth_specular_2048.jpg', t => {
+      t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      earthMat.specularMap = t; earthMat.needsUpdate = true; onLoad();
+    }, undefined, () => onLoad());
+    tl.load(IMG + 'earth_nightmap.jpg', t => {
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      earthMat.emissiveMap = t;
+      earthMat.emissive = new THREE.Color(0xffcc55);
+      earthMat.emissiveIntensity = 0.46;
+      earthMat.needsUpdate = true; onLoad();
+    });
+
+    const earth = new THREE.Mesh(new THREE.SphereGeometry(R, 128, 128), earthMat);
+    earth.rotation.y = THREE.MathUtils.degToRad(-70);
+    globe.add(earth);
+    clickableBodies.push(earth);
+
+    /* ─────────────────────────────────────────
+       HÌNH CẦU MẶT TRỜI VỚI TEXTURE ĐƯỢC TẢI
+    ───────────────────────────────────────── */
+    let sunMesh;
+    tl.load(IMG + 'sun.jpg', (texture) => {
+      // Texture Mặt Trời thường cần màu sắc rực rỡ và phát sáng
+      texture.colorSpace = THREE.SRGBColorSpace;
+
+      // Tạo hình cầu cho Mặt Trời
+      // Kích thước của Mặt Trời thực tế là khổng lồ so với Trái Đất.
+      // Tuy nhiên, để có thể nhìn thấy cả hai cùng lúc, chúng ta sử dụng một tỉ lệ không thực tế,
+      // đặt Mặt Trời ở gần và có kích thước dễ nhìn.
+      const sunGeometry = new THREE.SphereGeometry(R * 5.4, 96, 96);
+
+      // Vì Mặt Trời tự phát sáng, chúng ta sử dụng BasicMaterial thay vì Phong hay Standard để nó không bị ảnh hưởng bởi bóng tối.
+      const sunMaterial = new THREE.MeshBasicMaterial({
+        map: texture,
+        // Có thể thêm một màu cơ bản hơi vàng-cam
+        color: 0xffeebb,
+      });
+
+      sunMesh = new THREE.Mesh(sunGeometry, sunMaterial);
+      sunMesh.position.set(0, 0, 0);
+
+      scene.add(sunMesh);
+      clickableBodies.push(sunMesh);
+
+      // Quầng sáng lớn của Mặt Trời
+      const sunHalo = new THREE.Mesh(
+        new THREE.SphereGeometry(R * 7.5, 64, 64),
+        new THREE.MeshBasicMaterial({
+          color: 0xffb347,
+          transparent: true,
+          opacity: 0.16,
+          blending: THREE.AdditiveBlending,
+          side: THREE.BackSide,
+          depthWrite: false,
+        })
+      );
+      sunMesh.add(sunHalo);
+      onLoad();
+    });
+
+    /* ─────────────────────────────────────────
+       SOLAR SYSTEM (texture-based) around Earth
+    ───────────────────────────────────────── */
+    const solarSystemGroup = new THREE.Group();
+    scene.add(solarSystemGroup);
+
+    const otherPlanetsGroup = new THREE.Group();
+    solarSystemGroup.add(otherPlanetsGroup);
+
+    const orbitMaterial = new THREE.LineBasicMaterial({ color: 0xbddcff, transparent: true, opacity: 0.12 });
+    const planetNodes = [];
+    const sunRays = [];
+
+    function addOrbit(radius, parent = solarSystemGroup) {
+      const pts = [];
+      for (let i = 0; i <= 180; i++) {
+        const a = (i / 180) * Math.PI * 2;
+        pts.push(new THREE.Vector3(Math.cos(a) * radius, 0, Math.sin(a) * radius));
+      }
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), orbitMaterial);
+      parent.add(line);
+    }
+
+    function makePlanet(def) {
+      const orbitRadius = orbitRadiusFromAU(def.au);
+      addOrbit(orbitRadius, otherPlanetsGroup);
+
+      const mat = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        roughness: def.roughness ?? 0.86,
+        metalness: 0.02,
+      });
+      tl.load(IMG + def.texture, tex => {
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        mat.map = tex;
+        mat.needsUpdate = true;
+        onLoad();
+      });
+
+      const mesh = new THREE.Mesh(new THREE.SphereGeometry(def.radius, 48, 48), mat);
+      mesh.position.set(orbitRadius, 0, 0);
+      otherPlanetsGroup.add(mesh);
+      clickableBodies.push(mesh);
+
+      const node = {
+        mesh,
+        orbitRadius,
+        orbitSpeed: def.orbitSpeed,
+        spinSpeed: def.spinSpeed,
+        orbitAngle: Math.random() * Math.PI * 2,
+      };
+
+      const rayGeo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, 0),
+        mesh.position.clone(),
+      ]);
+      const ray = new THREE.Line(
+        rayGeo,
+        new THREE.LineBasicMaterial({ color: 0xffcc7a, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending })
+      );
+      otherPlanetsGroup.add(ray);
+      sunRays.push({ line: ray, target: mesh });
+
+      if (def.ring) {
+        const ringTex = tl.load(IMG + 'saturn_ring.png', () => onLoad());
+        ringTex.colorSpace = THREE.SRGBColorSpace;
+        const ringGeo = new THREE.RingGeometry(def.radius * 1.35, def.radius * 2.35, 96);
+        const ringMat = new THREE.MeshBasicMaterial({
+          map: ringTex,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.88,
+          depthWrite: false,
+        });
+        const ring = new THREE.Mesh(ringGeo, ringMat);
+        ring.rotation.x = THREE.MathUtils.degToRad(76);
+        mesh.add(ring);
+      }
+
+      planetNodes.push(node);
+    }
+
+    [
+      { texture: 'mercury.jpg', radius: 0.7,  au: 0.39,  orbitSpeed: 1.40, spinSpeed: 0.08, roughness: 0.92 },
+      { texture: 'venus.jpg',   radius: 1.2,  au: 0.72,  orbitSpeed: 0.95, spinSpeed: 0.04, roughness: 0.88 },
+      { texture: 'mars.jpg',    radius: 0.85, au: 1.52,  orbitSpeed: 0.56, spinSpeed: 0.07, roughness: 0.90 },
+      { texture: 'jupiter.jpg', radius: 2.6,  au: 5.20,  orbitSpeed: 0.23, spinSpeed: 0.18, roughness: 0.84 },
+      { texture: 'saturn.jpg',  radius: 2.3,  au: 9.58,  orbitSpeed: 0.17, spinSpeed: 0.15, roughness: 0.84, ring: true },
+      { texture: 'uranus.jpg',  radius: 1.6,  au: 19.20, orbitSpeed: 0.11, spinSpeed: 0.11, roughness: 0.83 },
+      { texture: 'neptune.jpg', radius: 1.55, au: 30.05, orbitSpeed: 0.09, spinSpeed: 0.10, roughness: 0.83 },
+    ].forEach(makePlanet);
+
+    // Earth orbit around Sun
+    const earthOrbit = {
+      radius: orbitRadiusFromAU(1),
+      angle: Math.random() * Math.PI * 2,
+      speed: 0.72,
+    };
+    addOrbit(earthOrbit.radius);
+    globe.position.set(earthOrbit.radius, 0, 0);
+
+    const earthRay = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), globe.position.clone()]),
+      new THREE.LineBasicMaterial({ color: 0xffd38a, transparent: true, opacity: 0.2, blending: THREE.AdditiveBlending })
+    );
+    solarSystemGroup.add(earthRay);
+
+    // Moon around Earth
+    const moonMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, metalness: 0.0 });
+    tl.load(IMG + 'moon.jpg', tex => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      moonMat.map = tex;
+      moonMat.needsUpdate = true;
+      onLoad();
+    });
+    const moon = new THREE.Mesh(new THREE.SphereGeometry(0.23, 40, 40), moonMat);
+    globe.add(moon);
+    clickableBodies.push(moon);
+    let moonAngle = 0;
+
+    /* ── Earth layers (exploded view) ── */
+    const earthLayersGroup = new THREE.Group();
+    earthLayersGroup.visible = false;
+    globe.add(earthLayersGroup);
+
+    const earthLayerDefs = [
+      {
+        name: 'Vỏ Trái Đất',
+        radius: R,
+        color: 0x58a6ff,
+        opacity: 0.5,
+        spinFactor: 1.0,
+        explodeX: -3.0,
+        details: [
+          'Độ dày: 5–70 km',
+          'Nhiệt độ: ~0–700°C',
+          'Thành phần: silicat nhẹ (granit/bazan)',
+        ],
+      },
+      {
+        name: 'Lớp Manti',
+        radius: R * 0.86,
+        color: 0xffa94d,
+        opacity: 0.42,
+        spinFactor: 0.78,
+        explodeX: -1.05,
+        details: [
+          'Độ dày: ~2,900 km',
+          'Nhiệt độ: ~1,000–3,700°C',
+          'Trạng thái: rắn dẻo, có đối lưu',
+        ],
+      },
+      {
+        name: 'Nhân Ngoài',
+        radius: R * 0.54,
+        color: 0xff6b6b,
+        opacity: 0.5,
+        spinFactor: 0.62,
+        explodeX: 1.0,
+        details: [
+          'Độ dày: ~2,260 km',
+          'Nhiệt độ: ~4,000–5,500°C',
+          'Trạng thái: lỏng (Fe-Ni), tạo từ trường',
+        ],
+      },
+      {
+        name: 'Nhân Trong',
+        radius: R * 0.33,
+        color: 0xfff3b0,
+        opacity: 0.9,
+        spinFactor: 0.46,
+        explodeX: 2.85,
+        details: [
+          'Bán kính: ~1,220 km',
+          'Nhiệt độ: ~5,200–6,000°C',
+          'Trạng thái: rắn (Fe-Ni) do áp suất cao',
+        ],
+      },
+    ];
+
+    const earthLayers = earthLayerDefs.map((def) => {
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(def.radius, 64, 64),
+        new THREE.MeshPhongMaterial({
+          color: def.color,
+          transparent: true,
+          opacity: def.opacity,
+          shininess: 18,
+          emissive: new THREE.Color(def.color).multiplyScalar(0.08),
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        })
+      );
+      mesh.userData.earthLayer = def;
+      earthLayersGroup.add(mesh);
+      clickableBodies.push(mesh);
+      return { ...def, mesh };
+    });
+
+    const earthLayerBlend = { current: 0, target: 0 };
+
+    function setEarthLayerMode(enabled) {
+      earthLayersGroup.visible = enabled;
+      earth.visible = !enabled;
+      clouds.visible = !enabled && state.clouds;
+      atm.visible = halo.visible = !enabled && state.atm;
+
+      if (!enabled) {
+        const current = selectedFocus?.get?.();
+        if (current?.userData?.earthLayer) {
+          selectedFocus = focusTargets[0];
+          refreshFocusLabel();
+          if (followSelected) snapCameraToFocus();
+        }
+      }
+    }
+
+    function normalizeLon(deg) {
+      return ((deg + 540) % 360) - 180;
+    }
+
+    function latLonToSphere(latDeg, lonDeg, radius) {
+      const lat = THREE.MathUtils.degToRad(latDeg);
+      const lon = THREE.MathUtils.degToRad(normalizeLon(lonDeg));
+      const x = radius * Math.cos(lat) * Math.cos(lon);
+      const y = radius * Math.sin(lat);
+      const z = radius * Math.cos(lat) * Math.sin(lon);
+      return new THREE.Vector3(x, y, z);
+    }
+
+    const countryFeatures = [];
+
+    function getCountryNameFromFeature(feature) {
+      const p = feature?.properties || {};
+      return p.name || p.ADMIN || p.admin || p.NAME || p.sovereignt || p.SOVEREIGNT || 'Không rõ';
+    }
+
+    function ringContainsLonLat(lon, lat, ring) {
+      let inside = false;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const xi = ring[i][0], yi = ring[i][1];
+        const xj = ring[j][0], yj = ring[j][1];
+
+        const intersects = ((yi > lat) !== (yj > lat))
+          && (lon < (xj - xi) * (lat - yi) / ((yj - yi) || 1e-12) + xi);
+        if (intersects) inside = !inside;
+      }
+      return inside;
+    }
+
+    function polygonContainsLonLat(lon, lat, polygonCoords) {
+      if (!polygonCoords?.length) return false;
+      if (!ringContainsLonLat(lon, lat, polygonCoords[0])) return false;
+      for (let i = 1; i < polygonCoords.length; i++) {
+        if (ringContainsLonLat(lon, lat, polygonCoords[i])) return false;
+      }
+      return true;
+    }
+
+    function featureContainsLonLat(lon, lat, feature) {
+      const g = feature?.geometry;
+      if (!g) return false;
+      if (lat < feature.minLat || lat > feature.maxLat) return false;
+
+      if (!feature.crossesDateline) {
+        if (lon < feature.minLon || lon > feature.maxLon) return false;
+      } else {
+        if (!(lon >= feature.maxLon || lon <= feature.minLon)) return false;
+      }
+
+      if (g.type === 'Polygon') {
+        return polygonContainsLonLat(lon, lat, g.coordinates);
+      }
+      if (g.type === 'MultiPolygon') {
+        return g.coordinates.some((poly) => polygonContainsLonLat(lon, lat, poly));
+      }
+      return false;
+    }
+
+    function findCountryNameAtLonLat(lon, lat) {
+      for (const feature of countryFeatures) {
+        if (featureContainsLonLat(lon, lat, feature)) return feature.countryName;
+      }
+      return null;
+    }
+
+    fetch('./geojson/countries.json')
+      .then((r) => r.json())
+      .then((fc) => {
+        (fc.features || []).forEach((f) => {
+          const g = f?.geometry;
+          if (!g || (g.type !== 'Polygon' && g.type !== 'MultiPolygon')) return;
+
+          const rings = g.type === 'Polygon'
+            ? g.coordinates
+            : g.coordinates.flat();
+
+          let minLat = 90;
+          let maxLat = -90;
+          let minLon = 180;
+          let maxLon = -180;
+          for (const ring of rings) {
+            for (const point of ring) {
+              const lon = point[0];
+              const lat = point[1];
+              if (lon < minLon) minLon = lon;
+              if (lon > maxLon) maxLon = lon;
+              if (lat < minLat) minLat = lat;
+              if (lat > maxLat) maxLat = lat;
+            }
+          }
+
+          const crossesDateline = (maxLon - minLon) > 180;
+
+          countryFeatures.push({
+            ...f,
+            countryName: getCountryNameFromFeature(f),
+            minLon,
+            maxLon,
+            minLat,
+            maxLat,
+            crossesDateline,
+          });
+        });
+      })
+      .catch(() => {
+        // Nếu lỗi tải dữ liệu biên giới, popup vẫn hiển thị lat/lon như cũ.
+      });
+
+    // Sky texture layer
+    const sky = new THREE.Mesh(
+      new THREE.SphereGeometry(300, 64, 64),
+      new THREE.MeshBasicMaterial({ side: THREE.BackSide, color: 0xffffff })
+    );
+    tl.load(IMG + 'stars_milky_way.jpg', tex => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      sky.material.map = tex;
+      sky.material.needsUpdate = true;
+      onLoad();
+    });
+    scene.add(sky);
+
+    /* ── Clouds ── */
+    const cloudMat = new THREE.MeshPhongMaterial({
+      transparent: true, opacity: 0.36,
+      depthWrite: false, blending: THREE.NormalBlending,
+    });
+    tl.load(BASE + 'earth_clouds_1024.png', t => {
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      cloudMat.map = t; cloudMat.needsUpdate = true;
+    });
+    const clouds = new THREE.Mesh(new THREE.SphereGeometry(R * 1.013, 96, 96), cloudMat);
+    clouds.rotation.y = earth.rotation.y;
+    globe.add(clouds);
+
+    /* ── Atmosphere — Fresnel rim shader ── */
+    const atmVert = /* glsl */`
+      varying vec3 vNormal;
+      varying vec3 vViewDir;
+      void main(){
+        vNormal  = normalize(normalMatrix * normal);
+        vec4 mvPos = modelViewMatrix * vec4(position,1.0);
+        vViewDir = normalize(-mvPos.xyz);
+        gl_Position = projectionMatrix * mvPos;
+      }
+    `;
+    const atmFrag = /* glsl */`
+      uniform vec3  uColor;
+      uniform float uPow;
+      uniform float uMult;
+      varying vec3 vNormal;
+      varying vec3 vViewDir;
+      void main(){
+        float rim = 1.0 - max(dot(vNormal, vViewDir), 0.0);
+        rim = pow(rim, uPow);
+        gl_FragColor = vec4(uColor * rim * uMult, rim * 0.9);
+      }
+    `;
+    const atmMat = new THREE.ShaderMaterial({
+      vertexShader: atmVert, fragmentShader: atmFrag,
+      uniforms: {
+        uColor: { value: new THREE.Color(0x4488ff) },
+        uPow:   { value: 2.8 },
+        uMult:  { value: 1.5 },
+      },
+      transparent: true, side: THREE.FrontSide,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const atm = new THREE.Mesh(new THREE.SphereGeometry(R * 1.06, 64, 64), atmMat);
+    globe.add(atm);
+
+    // Outer soft halo
+    const haloMat = new THREE.MeshBasicMaterial({
+      color: 0x1a4488, transparent: true, opacity: 0.1,
+      side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const halo = new THREE.Mesh(new THREE.SphereGeometry(R * 1.14, 48, 48), haloMat);
+    globe.add(halo);
+
+    /* ── Lat / Lon grid ── */
+    const gridGroup = new THREE.Group();
+    globe.add(gridGroup);
+
+    (function buildGrid() {
+      const lineMat = new THREE.LineBasicMaterial({ color: 0x1a4488, transparent: true, opacity: 0.2 });
+      const eqMat   = new THREE.LineBasicMaterial({ color: 0x3366cc, transparent: true, opacity: 0.45 });
+
+      for (let lat = -75; lat <= 75; lat += 15) {
+        const pts = [], y = R*1.002*Math.sin(lat*Math.PI/180), cr = R*1.002*Math.cos(lat*Math.PI/180);
+        for (let i = 0; i <= 128; i++) {
+          const a = (i/128)*Math.PI*2;
+          pts.push(new THREE.Vector3(Math.cos(a)*cr, y, Math.sin(a)*cr));
+        }
+        gridGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+          lat === 0 ? eqMat : lineMat));
+      }
+      for (let lon = 0; lon < 360; lon += 15) {
+        const pts = [], lr = lon*Math.PI/180;
+        for (let i = 0; i <= 96; i++) {
+          const la = (-90 + (i/96)*180)*Math.PI/180;
+          pts.push(new THREE.Vector3(R*1.002*Math.cos(la)*Math.cos(lr), R*1.002*Math.sin(la), R*1.002*Math.cos(la)*Math.sin(lr)));
+        }
+        gridGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), lineMat));
+      }
+    })();
+
+    /* ── Aurora borealis ── */
+    const auroraGroup = new THREE.Group();
+    globe.add(auroraGroup);
+    auroraGroup.visible = false;
+
+    (function buildAurora() {
+      const palette = [[0x00ff99,0.7],[0x00ffdd,0.6],[0x44aaff,0.65],[0xff55cc,0.55]];
+      // North
+      palette.forEach(([color,op],i) => {
+        const pts = [], lat = 67 + i*2.5, rad = lat*Math.PI/180;
+        const cr = (R*1.065 + i*0.015)*Math.cos(rad), y = (R*1.065 + i*0.015)*Math.sin(rad);
+        for (let j = 0; j <= 256; j++) {
+          const a = (j/256)*Math.PI*2;
+          const w = Math.sin(a*9 + i)*0.05;
+          pts.push(new THREE.Vector3(Math.cos(a)*(cr+w), y+w*0.6, Math.sin(a)*(cr+w)));
+        }
+        auroraGroup.add(new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints(pts),
+          new THREE.LineBasicMaterial({ color, transparent:true, opacity:op, blending:THREE.AdditiveBlending })
+        ));
+      });
+      // South
+      [[0x33ffaa,0.5],[0x00ddff,0.45],[0x66ff88,0.4]].forEach(([color,op],i) => {
+        const pts = [], lat = -(64 + i*3), rad = lat*Math.PI/180;
+        const cr = (R*1.06 + i*0.012)*Math.cos(rad), y = (R*1.06 + i*0.012)*Math.sin(rad);
+        for (let j = 0; j <= 256; j++) {
+          const a = (j/256)*Math.PI*2;
+          const w = Math.sin(a*7 + i*1.4)*0.035;
+          pts.push(new THREE.Vector3(Math.cos(a)*(cr+w), y+w*0.5, Math.sin(a)*(cr+w)));
+        }
+        auroraGroup.add(new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints(pts),
+          new THREE.LineBasicMaterial({ color, transparent:true, opacity:op, blending:THREE.AdditiveBlending })
+        ));
+      });
+    })();
+
+    /* ── ISS orbit ── */
+    const issGroup = new THREE.Group();
+    issGroup.rotation.z = THREE.MathUtils.degToRad(51.6); // real ISS inclination
+    globe.add(issGroup);
+
+    const ISS_R = R * 1.048;
+    // Orbit path
+    const issOrbitPts = [];
+    for (let i = 0; i <= 256; i++) {
+      const a = (i/256)*Math.PI*2;
+      issOrbitPts.push(new THREE.Vector3(Math.cos(a)*ISS_R, 0, Math.sin(a)*ISS_R));
+    }
+    issGroup.add(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(issOrbitPts),
+      new THREE.LineBasicMaterial({ color:0xffffff, transparent:true, opacity:0.2 })
+    ));
+
+    // ISS dot + glow
+    const issDot = new THREE.Mesh(
+      new THREE.SphereGeometry(0.024, 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffffff })
+    );
+    const issGlow = new THREE.Mesh(
+      new THREE.SphereGeometry(0.055, 8, 8),
+      new THREE.MeshBasicMaterial({ color:0x88ccff, transparent:true, opacity:0.4, blending:THREE.AdditiveBlending })
+    );
+    issDot.add(issGlow);
+    issGroup.add(issDot);
+    let issAngle = 0;
+
+    /* ── Starfield ── */
+    const starGroup = new THREE.Group();
+    scene.add(starGroup);
+
+    (() => {
+      const N = 7000;
+      const pos = new Float32Array(N*3), col = new Float32Array(N*3);
+      for (let i = 0; i < N; i++) {
+        const th = Math.random()*Math.PI*2, ph = Math.acos(2*Math.random()-1);
+        const r = 90 + Math.random()*100;
+        pos[i*3]   = r*Math.sin(ph)*Math.cos(th);
+        pos[i*3+1] = r*Math.sin(ph)*Math.sin(th);
+        pos[i*3+2] = r*Math.cos(ph);
+        const w = Math.random();
+        col[i*3]=0.82+w*0.18; col[i*3+1]=0.86+w*0.1; col[i*3+2]=0.9+(1-w)*0.1;
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(pos,3));
+      geo.setAttribute('color',    new THREE.BufferAttribute(col,3));
+      starGroup.add(new THREE.Points(geo, new THREE.PointsMaterial({
+        size:0.3, sizeAttenuation:true, vertexColors:true, transparent:true, opacity:0.9,
+      })));
+    })();
+
+    // Milky Way band
+    (() => {
+      const N = 2500, pos = new Float32Array(N*3);
+      for (let i=0;i<N;i++){
+        const lon=(Math.random()*360-180)*Math.PI/180, lat=(Math.random()-0.5)*20*Math.PI/180, r=95+Math.random()*25;
+        pos[i*3]=r*Math.cos(lat)*Math.cos(lon); pos[i*3+1]=r*Math.sin(lat); pos[i*3+2]=r*Math.cos(lat)*Math.sin(lon);
+      }
+      const geo=new THREE.BufferGeometry(); geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
+      const mw=new THREE.Points(geo,new THREE.PointsMaterial({color:0xeee8dd,size:0.16,transparent:true,opacity:0.28,blending:THREE.AdditiveBlending}));
+      mw.rotation.x=THREE.MathUtils.degToRad(60); scene.add(mw);
+    })();
+
+    /* ─────────────────────────────────────────
+       FEATURE TOGGLES
+    ───────────────────────────────────────── */
+    const state = { clouds:true, atm:true, night:true, planets:true, aurora:false, iss:true, stars:true, grid:true, layers:false, auto:false, paused:false, realtime:false };
+
+    const speedLevels = [0.25, 0.5, 1, 1.5, 2, 3];
+    let speedIndex = 2;
+
+    const defaultMinDistance = 4;
+    const defaultMaxDistance = 320;
+
+    const focusTargets = [
+      { name: 'Trái Đất', get: () => earth, radius: R },
+      ...earthLayers.map((layer) => ({ name: layer.name, get: () => layer.mesh, radius: layer.radius })),
+      { name: 'Sao Thủy', get: () => planetNodes[0]?.mesh, radius: 0.7 },
+      { name: 'Sao Kim', get: () => planetNodes[1]?.mesh, radius: 1.2 },
+      { name: 'Sao Hỏa', get: () => planetNodes[2]?.mesh, radius: 0.85 },
+      { name: 'Sao Mộc', get: () => planetNodes[3]?.mesh, radius: 2.6 },
+      { name: 'Sao Thổ', get: () => planetNodes[4]?.mesh, radius: 2.3 },
+      { name: 'Sao Thiên Vương', get: () => planetNodes[5]?.mesh, radius: 1.6 },
+      { name: 'Sao Hải Vương', get: () => planetNodes[6]?.mesh, radius: 1.55 },
+      { name: 'Mặt Trăng', get: () => moon, radius: 0.23 },
+      { name: 'Mặt Trời', get: () => sunMesh, radius: R * 5.4 },
+    ];
+    let selectedFocus = focusTargets[0];
+    let followSelected = false;
+
+    const focusWorld = new THREE.Vector3();
+    const focusCamDir = new THREE.Vector3();
+    const desiredCamPos = new THREE.Vector3();
+    const presetTarget = new THREE.Vector3();
+    const presetPos = new THREE.Vector3();
+    const realtimePhaseOffset = THREE.MathUtils.degToRad(-70);
+    const telemetry = createTelemetryUpdater(document);
+
+    const infoPopup = document.getElementById('pick-popup');
+    function showInfoPopup(clientX, clientY, title, lines = []) {
+      if (!infoPopup) return;
+      infoPopup.innerHTML = `<div class="pick-title">${title}</div>${lines.map((l) => `<div class="pick-row">${l}</div>`).join('')}`;
+      infoPopup.style.left = `${clientX + 12}px`;
+      infoPopup.style.top = `${clientY + 12}px`;
+      infoPopup.classList.add('show');
+    }
+    function hideInfoPopup() {
+      if (!infoPopup) return;
+      infoPopup.classList.remove('show');
+    }
+
+    function getUtcHoursDecimal() {
+      const now = new Date();
+      return now.getUTCHours() + now.getUTCMinutes() / 60 + now.getUTCSeconds() / 3600;
+    }
+
+    function getEarthRealtimeRotation() {
+      return THREE.MathUtils.degToRad((getUtcHoursDecimal() / 24) * 360) + realtimePhaseOffset;
+    }
+
+    function isRenderable(obj) {
+      let n = obj;
+      while (n) {
+        if (!n.visible) return false;
+        n = n.parent;
+      }
+      return true;
+    }
+
+    function activeFocus() {
+      const obj = selectedFocus?.get?.();
+      if (selectedFocus && obj && isRenderable(obj)) return selectedFocus;
+      return focusTargets[0];
+    }
+
+    function refreshFocusLabel() {
+      const body = activeFocus();
+      const bodyEl = document.getElementById('v-body');
+      if (bodyEl) bodyEl.textContent = body.name;
+      telemetry.update(body.name);
+    }
+
+    function snapCameraToFocus() {
+      const body = activeFocus();
+      const obj = body.get();
+      if (!obj) return;
+
+      obj.getWorldPosition(focusWorld);
+      controls.target.copy(focusWorld);
+
+      focusCamDir.copy(camera.position).sub(focusWorld);
+      if (focusCamDir.lengthSq() < 1e-6) focusCamDir.set(1, 0.28, 1);
+      focusCamDir.normalize();
+
+      const desiredDist = Math.max(body.radius * 4.8, body.radius + 2.0);
+      camera.position.copy(focusWorld).add(focusCamDir.multiplyScalar(desiredDist));
+    }
+
+    function wire(id, key, onChange) {
+      const btn = document.getElementById(id);
+      btn.addEventListener('click', () => {
+        state[key] = !state[key];
+        btn.classList.toggle('on', state[key]);
+        onChange(state[key]);
+      });
+    }
+    wire('t-clouds', 'clouds', v => { if (!state.layers) clouds.visible = v; });
+    wire('t-atm',    'atm',    v => { if (!state.layers) atm.visible = halo.visible = v; });
+    wire('t-night',  'night',  v => { earthMat.emissiveIntensity = v ? 0.46 : 0; earthMat.needsUpdate=true; });
+    wire('t-planets','planets',v => {
+      otherPlanetsGroup.visible = v;
+      if (!v) {
+        const current = selectedFocus?.get?.();
+        if (current && !isRenderable(current)) {
+          selectedFocus = focusTargets[0];
+          refreshFocusLabel();
+          if (followSelected) snapCameraToFocus();
+        }
+      }
+    });
+    wire('t-aurora', 'aurora', v => { auroraGroup.visible = v; });
+    wire('t-iss',    'iss',    v => { issGroup.visible = v; });
+    wire('t-stars',  'stars',  v => { starGroup.visible = v; });
+    wire('t-grid',   'grid',   v => { gridGroup.visible = v; });
+    wire('t-layers', 'layers', v => {
+      earthLayerBlend.target = v ? 1 : 0;
+      setEarthLayerMode(v);
+    });
+    wire('t-auto',   'auto',   v => { controls.autoRotate = v; });
+    wire('t-pause',  'paused', v => {
+      controls.autoRotate = v ? false : state.auto;
+    });
+    wire('t-realtime', 'realtime', () => {});
+
+    const speedBtn = document.getElementById('t-speed');
+    function refreshSpeedLabel() {
+      speedBtn.textContent = `⏩ Tốc độ x${speedLevels[speedIndex].toFixed(2).replace(/\.00$/, '.0').replace(/0$/, '')}`;
+    }
+    speedBtn.addEventListener('click', () => {
+      speedIndex = (speedIndex + 1) % speedLevels.length;
+      refreshSpeedLabel();
+    });
+    refreshSpeedLabel();
+
+    const cameraPresets = [
+      {
+        name: 'Quỹ đạo gần',
+        apply: () => {
+          earth.getWorldPosition(presetTarget);
+          presetPos.copy(presetTarget).add(new THREE.Vector3(8, 3.6, 8));
+        },
+      },
+      {
+        name: 'Quỹ đạo cao',
+        apply: () => {
+          globe.getWorldPosition(presetTarget);
+          presetPos.copy(presetTarget).add(new THREE.Vector3(0, 16, 30));
+        },
+      },
+      {
+        name: 'Cực Bắc',
+        apply: () => {
+          earth.getWorldPosition(presetTarget);
+          presetPos.copy(presetTarget).add(new THREE.Vector3(0.3, 14, 0.3));
+        },
+      },
+      {
+        name: 'Từ phía Mặt Trời',
+        apply: () => {
+          earth.getWorldPosition(presetTarget);
+          const sunPos = sunMesh ? sunMesh.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3(0, 0, 0);
+          const dir = presetTarget.clone().sub(sunPos).normalize();
+          presetPos.copy(presetTarget).add(dir.multiplyScalar(18)).add(new THREE.Vector3(0, 1.6, 0));
+        },
+      },
+    ];
+    let presetIndex = 0;
+    const presetBtn = document.getElementById('t-preset');
+    function refreshPresetLabel() {
+      if (!presetBtn) return;
+      presetBtn.textContent = `Preset: ${cameraPresets[presetIndex].name}`;
+    }
+    function applyCurrentPreset() {
+      const p = cameraPresets[presetIndex];
+      p.apply();
+      controls.target.copy(presetTarget);
+      camera.position.copy(presetPos);
+      followSelected = false;
+      hideInfoPopup();
+    }
+    presetBtn?.addEventListener('click', () => {
+      presetIndex = (presetIndex + 1) % cameraPresets.length;
+      refreshPresetLabel();
+      applyCurrentPreset();
+    });
+    refreshPresetLabel();
+
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    const pickLocal = new THREE.Vector3();
+
+    renderer.domElement.addEventListener('click', (ev) => {
+      if (renderer.xr.isPresenting) return;
+
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+
+      const hits = raycaster.intersectObjects(clickableBodies.filter(isRenderable), false);
+      if (!hits.length) {
+        hideInfoPopup();
+        return;
+      }
+
+      let pickedObj = hits[0].object;
+      if (pickedObj === earth) {
+        const nonEarthHit = hits.find((h) => h.object !== earth);
+        if (nonEarthHit) pickedObj = nonEarthHit.object;
+      }
+
+      if (pickedObj === earth) {
+        pickLocal.copy(earth.worldToLocal(hits[0].point.clone()));
+        const rr = pickLocal.length();
+        const lat = THREE.MathUtils.radToDeg(Math.asin(pickLocal.y / rr));
+        const lon = normalizeLon(THREE.MathUtils.radToDeg(Math.atan2(-pickLocal.z, pickLocal.x)));
+        const countryName = findCountryNameAtLonLat(lon, lat) || 'Đại dương / không xác định';
+        const tzHours = lon / 15;
+        const utcMs = Date.now();
+        const localMs = utcMs + tzHours * 3600 * 1000;
+        const localTime = new Date(localMs).toUTCString().slice(17, 25);
+        showInfoPopup(
+          ev.clientX,
+          ev.clientY,
+          'Điểm trên Trái Đất',
+          [
+            `Quốc gia: ${countryName}`,
+            `Vĩ độ: ${lat.toFixed(2)}°`,
+            `Kinh độ: ${lon.toFixed(2)}°`,
+            `Giờ địa phương ước tính: ${localTime}`,
+          ]
+        );
+      } else if (pickedObj.userData?.earthLayer) {
+        const layer = pickedObj.userData.earthLayer;
+        showInfoPopup(
+          ev.clientX,
+          ev.clientY,
+          layer.name,
+          layer.details
+        );
+      } else {
+        hideInfoPopup();
+      }
+
+      const pickedFocus = focusTargets.find((f) => f.get() === pickedObj);
+      if (!pickedFocus) return;
+
+      selectedFocus = pickedFocus;
+      followSelected = true;
+      controls.autoRotate = false;
+      if (state.auto) {
+        state.auto = false;
+        const autoBtn = document.getElementById('t-auto');
+        if (autoBtn) autoBtn.classList.remove('on');
+      }
+
+      refreshFocusLabel();
+      snapCameraToFocus();
+    });
+    refreshFocusLabel();
+
+    /* ─────────────────────────────────────────
+       LIVE HUD
+    ───────────────────────────────────────── */
+    const vDist = document.getElementById('v-dist');
+    const vLon  = document.getElementById('v-lon');
+    const vIss  = document.getElementById('v-iss');
+    const vBody = document.getElementById('v-body');
+    const earthWorld = new THREE.Vector3();
+
+    /* ─────────────────────────────────────────
+       ANIMATION LOOP
+    ───────────────────────────────────────── */
+    const clock = new THREE.Clock();
+
+    function tick() {
+      const dt = clock.getDelta();
+      const t  = clock.elapsedTime;
+      const simDt = state.paused ? 0 : dt * speedLevels[speedIndex];
+
+      // Earth self-rotation
+      if (state.realtime) {
+        earth.rotation.y = getEarthRealtimeRotation();
+        clouds.rotation.y = earth.rotation.y * 1.018 + 0.12;
+      } else {
+        earth.rotation.y += simDt * 0.09;
+        clouds.rotation.y += simDt * 0.106;
+      }
+
+      earthLayerBlend.current = THREE.MathUtils.lerp(earthLayerBlend.current, earthLayerBlend.target, 0.08);
+      earthLayers.forEach((layer) => {
+        layer.mesh.position.x = THREE.MathUtils.lerp(0, layer.explodeX, earthLayerBlend.current);
+        layer.mesh.rotation.y += simDt * 0.09 * layer.spinFactor;
+      });
+
+      // Earth quay tại chỗ để quan sát: giữ cố định vị trí, chỉ tự quay quanh trục
+      globe.position.set(earthOrbit.radius, 0, 0);
+
+      // Planet system around Earth
+      planetNodes.forEach((p) => {
+        p.orbitAngle += simDt * p.orbitSpeed * 0.55;
+        p.mesh.position.set(
+          Math.cos(p.orbitAngle) * p.orbitRadius,
+          Math.sin(p.orbitAngle * 0.33) * 0.12,
+          Math.sin(p.orbitAngle) * p.orbitRadius
+        );
+        p.mesh.rotation.y += simDt * p.spinSpeed;
+      });
+
+      // Update sun rays to planets
+      sunRays.forEach((r) => {
+        r.line.geometry.setFromPoints([new THREE.Vector3(0, 0, 0), r.target.position.clone()]);
+      });
+      earthRay.geometry.setFromPoints([new THREE.Vector3(0, 0, 0), globe.position.clone()]);
+
+      // Moon orbit around Earth
+      moonAngle += simDt * 0.95;
+      moon.position.set(
+        Math.cos(moonAngle) * (R * 2.25),
+        Math.sin(moonAngle * 0.5) * 0.1,
+        Math.sin(moonAngle) * (R * 2.25)
+      );
+      moon.rotation.y += simDt * 0.16;
+
+      // Sun self-rotation
+      if (sunMesh) {
+          // Thêm một chút chuyển động quay cho Mặt Trời để nó chân thực hơn.
+          // Tốc độ quay của Mặt Trời thực tế rất chậm.
+          sunMesh.rotation.y += simDt * 0.005;
+          sunMesh.rotation.x += simDt * 0.002;
+      }
+
+      // Grid tracks Earth rotation
+      gridGroup.rotation.y = earth.rotation.y;
+
+      // ISS orbit
+      issAngle += simDt * 0.4;
+      issDot.position.set(Math.cos(issAngle)*ISS_R, 0, Math.sin(issAngle)*ISS_R);
+
+      // Aurora shimmer
+      if (state.aurora) {
+        auroraGroup.children.forEach((l,i) => {
+          l.material.opacity = 0.3 + Math.sin(t*2.1 + i*0.8)*0.35;
+        });
+      }
+
+      // Atmosphere breathe
+      atmMat.uniforms.uMult.value = 1.4 + Math.sin(t*0.5)*0.12;
+
+      // Stars slow drift
+      starGroup.rotation.y += simDt * 0.0006;
+      sky.rotation.y += simDt * 0.0003;
+
+      // HUD
+      const focused = activeFocus();
+      const focusObj = focused.get() || earth;
+      focusObj.getWorldPosition(earthWorld);
+      const dist = camera.position.distanceTo(earthWorld);
+      vDist.textContent = Math.round(Math.max(0, (dist - focused.radius) * 3185)).toLocaleString() + ' km';
+      vLon.textContent  = (((-earth.rotation.y * 180/Math.PI) % 360 + 360) % 360).toFixed(1) + '°';
+      vIss.textContent  = (issAngle % (Math.PI*2) / (Math.PI*2) * 100).toFixed(1) + '%';
+      if (vBody) vBody.textContent = focused.name;
+      telemetry.update(focused.name);
+
+      if (followSelected) {
+        const body = focused;
+        const obj = body.get();
+        if (obj) {
+          obj.getWorldPosition(focusWorld);
+          controls.target.lerp(focusWorld, 0.16);
+
+          focusCamDir.copy(camera.position).sub(controls.target);
+          if (focusCamDir.lengthSq() < 1e-6) focusCamDir.set(1, 0.25, 1);
+          focusCamDir.normalize();
+
+          const minD = Math.max(body.radius * 1.35, 0.75);
+          const maxD = Math.max(body.radius * 18, 7);
+          controls.minDistance = minD;
+          controls.maxDistance = maxD;
+
+          const currentDist = camera.position.distanceTo(controls.target);
+          const clampedDist = THREE.MathUtils.clamp(currentDist, minD, maxD);
+          desiredCamPos.copy(controls.target).add(focusCamDir.multiplyScalar(clampedDist));
+          camera.position.lerp(desiredCamPos, 0.14);
+        }
+      } else {
+        controls.minDistance = defaultMinDistance;
+        controls.maxDistance = defaultMaxDistance;
+      }
+
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    renderer.setAnimationLoop(tick);
+
+    /* ─────────────────────────────────────────
+       RESIZE
+    ───────────────────────────────────────── */
+    window.addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      renderer.setSize(innerWidth, innerHeight);
+    });
+  </script>
+</body>
+</html>

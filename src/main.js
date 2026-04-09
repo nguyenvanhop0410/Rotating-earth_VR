@@ -10,7 +10,7 @@ import { createGalaxyBackdrop } from './scene/galaxy.js';
 import { createEarth } from './scene/earth.js';
 import { createMoon } from './scene/moon.js';
 import { createSatellite } from './scene/satellite.js';
-import { createRegionLabels, updateRegionLabels } from './scene/regions.js';
+import { createRegionLabels, getRegionAtRay, updateRegionLabels } from './scene/regions.js';
 
 let camera, scene, renderer;
 let controls;
@@ -28,19 +28,36 @@ let moonMeshRef;
 let controller1, controller2;
 let worldRoot;
 let vrInput = { right: null };
+let vrGrabState = {
+  active: false,
+  controller: null,
+  startControllerPosition: new THREE.Vector3(),
+  startWorldPosition: new THREE.Vector3()
+};
+let vrPointerState = {
+  hoveredRegion: null
+};
 let vrWorldScale = 1;
 let raycaster;
 const isMobileLike = /Mobi|Android|iPhone|iPad|Quest/i.test(navigator.userAgent);
 let performanceMode = isMobileLike ? 'vrSmooth' : 'balanced';
 let starfield;
 const vrZoomConfig = {
-  minScale: 0.88,
-  maxScale: 3.0,
-  speed: 0.9
+  minZ: -6.1,
+  maxZ: -4.65,
+  speed: 0.72
 };
 const vrRotateConfig = {
-  speed: 1.2,
-  deadZone: 0.14
+  speed: 1.05,
+  deadZone: 0.18
+};
+const vrRayConfig = {
+  idleColor: 0xffffff,
+  targetColor: 0x74d8ff,
+  idleOpacity: 0.72,
+  targetOpacity: 1,
+  idleLength: 8,
+  targetLength: 10
 };
 const PERFORMANCE_PRESETS = {
   quality: {
@@ -74,7 +91,8 @@ const PERFORMANCE_PRESETS = {
     galaxySegmentsH: 28
   }
 };
-const vrDefaultScale = 1.08;
+const vrDefaultScale = 0.78;
+const vrDefaultDistance = -5.2;
 const clock = new THREE.Clock();
 let galaxyBackdrop;
 const GREENWICH_TIMEZONE_ID = 'Etc/UTC';
@@ -139,8 +157,8 @@ function init() {
   if (infoEl) {
     infoEl.innerHTML = [
       'Realistic Earth (Space Scene)',
-      'VR: Right thumbstick Y = zoom, Right thumbstick X = rotate 360 deg',
-      'Trigger grab is disabled to keep Earth fixed in place'
+      'VR tay phải: Thumbstick Y = zoom, Thumbstick X = xoay, Grip = kéo thế giới',
+      'Trigger vào thủ đô để xem thông tin, Trigger vào khoảng trống để mở hoặc ẩn bảng điều khiển'
     ].join('<br>');
   }
 
@@ -226,11 +244,24 @@ function init() {
   controller2 = renderer.xr.getController(1);
   scene.add(controller1);
   scene.add(controller2);
+  addControllerRay(controller1);
+  addControllerRay(controller2);
 
   controller1.addEventListener('connected', onControllerConnected);
   controller1.addEventListener('disconnected', onControllerDisconnected);
+  controller1.addEventListener('selectstart', onControllerSelectStart);
+  controller1.addEventListener('selectend', onControllerSelectEnd);
+  controller1.addEventListener('squeezestart', onControllerGrabStart);
+  controller1.addEventListener('squeezeend', onControllerGrabEnd);
   controller2.addEventListener('connected', onControllerConnected);
   controller2.addEventListener('disconnected', onControllerDisconnected);
+  controller2.addEventListener('selectstart', onControllerSelectStart);
+  controller2.addEventListener('selectend', onControllerSelectEnd);
+  controller2.addEventListener('squeezestart', onControllerGrabStart);
+  controller2.addEventListener('squeezeend', onControllerGrabEnd);
+
+  renderer.xr.addEventListener('sessionstart', onXRSessionStart);
+  renderer.xr.addEventListener('sessionend', onXRSessionEnd);
 
   applyPerformanceMode(performanceMode);
 
@@ -239,7 +270,10 @@ function init() {
   worldRoot.scale.setScalar(vrWorldScale);
 
   // VR Button
-  document.body.appendChild(VRButton.createButton(renderer));
+  document.body.appendChild(VRButton.createButton(renderer, {
+    optionalFeatures: ['local-floor', 'dom-overlay'],
+    domOverlay: { root: document.body }
+  }));
 
   // Handle window resize
   window.addEventListener('resize', onWindowResize);
@@ -248,6 +282,9 @@ function init() {
   raycaster = new THREE.Raycaster();
   document.addEventListener('click', onDocumentClick);
   document.getElementById('closeRegionInfo').addEventListener('click', closeRegionInfo);
+  document.getElementById('panelToggle')?.addEventListener('click', () => {
+    togglePanelVisibility();
+  });
 
   initControlPanel({
     settings: SETTINGS,
@@ -278,6 +315,7 @@ function init() {
   });
 
   if (coordinatesMesh) coordinatesMesh.visible = coordinatesOverlayEnabled;
+  syncPanelToggleButton();
 }
 
 function startCameraTransition(targetPosition, targetLookAt, durationSec = 0.9, targetFov = camera?.fov ?? 72) {
@@ -293,6 +331,66 @@ function startCameraTransition(targetPosition, targetLookAt, durationSec = 0.9, 
     elapsed: 0,
     duration: Math.max(0.01, durationSec)
   };
+}
+
+function resetVRWorldTransform() {
+  if (!worldRoot) return;
+
+  vrGrabState.active = false;
+  vrGrabState.controller = null;
+  worldRoot.position.set(0, 0, vrDefaultDistance);
+  worldRoot.rotation.set(0, 0, 0);
+  vrWorldScale = vrDefaultScale;
+  worldRoot.scale.setScalar(vrWorldScale);
+}
+
+function onXRSessionStart() {
+  resetVRWorldTransform();
+  setPanelVisibility(false);
+  closeRegionInfo();
+  vrPointerState.hoveredRegion = null;
+  setControllerRayAppearance(controller1, false);
+  setControllerRayAppearance(controller2, false);
+}
+
+function onXRSessionEnd() {
+  setPanelVisibility(true);
+  closeRegionInfo();
+  vrInput.right = null;
+  vrPointerState.hoveredRegion = null;
+  setControllerRayAppearance(controller1, false);
+  setControllerRayAppearance(controller2, false);
+}
+
+function isPanelVisible() {
+  const panel = document.getElementById('panel');
+  return !!panel && !panel.classList.contains('is-hidden');
+}
+
+function syncPanelToggleButton() {
+  const button = document.getElementById('panelToggle');
+  if (!button) return;
+
+  const visible = isPanelVisible();
+  button.textContent = visible ? 'Ẩn điều khiển' : 'Hiện điều khiển';
+  button.setAttribute('aria-pressed', visible ? 'true' : 'false');
+}
+
+function setPanelVisibility(visible) {
+  const panel = document.getElementById('panel');
+  if (!panel) return;
+
+  panel.classList.toggle('is-hidden', !visible);
+  if (visible) {
+    vrGrabState.active = false;
+    vrGrabState.controller = null;
+  }
+  syncPanelToggleButton();
+}
+
+function togglePanelVisibility(forceVisible) {
+  const visible = typeof forceVisible === 'boolean' ? forceVisible : !isPanelVisible();
+  setPanelVisibility(visible);
 }
 
 function setControlDistanceRange(minDistance, maxDistance) {
@@ -460,7 +558,70 @@ function onControllerDisconnected(event) {
   const controller = event.target;
   controller.userData.inputSource = null;
   controller.userData.handedness = '';
-  if (controller === controller2) vrInput.right = null;
+  vrInput.right = null;
+  if (vrPointerState.hoveredRegion) {
+    vrPointerState.hoveredRegion = null;
+  }
+  setControllerRayAppearance(controller, false);
+  if (vrGrabState.controller === controller) {
+    vrGrabState.active = false;
+    vrGrabState.controller = null;
+  }
+}
+
+function onControllerGrabStart(event) {
+  if (!renderer.xr.isPresenting || !worldRoot) return;
+
+  const controller = event.target;
+  setPanelVisibility(false);
+  controller.getWorldPosition(vrGrabState.startControllerPosition);
+  vrGrabState.startWorldPosition.copy(worldRoot.position);
+  vrGrabState.controller = controller;
+  vrGrabState.active = true;
+}
+
+function onControllerGrabEnd(event) {
+  const controller = event.target;
+  if (vrGrabState.controller === controller) {
+    vrGrabState.active = false;
+    vrGrabState.controller = null;
+  }
+}
+
+function addControllerRay(controller) {
+  const geometry = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0, 0, -1)
+  ]);
+  const material = new THREE.LineBasicMaterial({
+    color: vrRayConfig.idleColor,
+    transparent: true,
+    opacity: vrRayConfig.idleOpacity
+  });
+  const ray = new THREE.Line(geometry, material);
+  ray.name = 'controllerRay';
+  ray.scale.z = vrRayConfig.idleLength;
+  controller.add(ray);
+}
+
+function onControllerSelectStart(event) {
+  if (!renderer.xr.isPresenting || !regionsGroup) return;
+
+  const controller = event.target;
+  const region = getSelectableRegionFromController(controller);
+
+  if (region) {
+    setPanelVisibility(false);
+    showRegionInfo(region, null);
+    return;
+  }
+
+  closeRegionInfo();
+  togglePanelVisibility();
+}
+
+function onControllerSelectEnd(event) {
+  void event;
 }
 
 function getRightController() {
@@ -503,8 +664,52 @@ function updateVRInputSources() {
   vrInput.right = extractPrimaryAxes(rightController?.userData?.inputSource);
 }
 
+function getSelectableRegionFromController(controller) {
+  if (!controller || !regionsGroup) return null;
+
+  raycaster.setFromXRController(controller);
+  const region = getRegionAtRay(raycaster, regionsGroup);
+  if (!region || region.isRegion) return null;
+
+  return region;
+}
+
+function setControllerRayAppearance(controller, isTargetingRegion) {
+  const ray = controller?.getObjectByName?.('controllerRay');
+  const material = ray?.material;
+  if (!ray || !material) return;
+
+  material.color.setHex(isTargetingRegion ? vrRayConfig.targetColor : vrRayConfig.idleColor);
+  material.opacity = isTargetingRegion ? vrRayConfig.targetOpacity : vrRayConfig.idleOpacity;
+  ray.scale.z = isTargetingRegion ? vrRayConfig.targetLength : vrRayConfig.idleLength;
+}
+
+function updateVRPointerState() {
+  const rightController = getRightController();
+  const hoveredRegion = getSelectableRegionFromController(rightController);
+  vrPointerState.hoveredRegion = hoveredRegion;
+  setControllerRayAppearance(rightController, !!hoveredRegion);
+
+  const otherController = rightController === controller1 ? controller2 : controller1;
+  setControllerRayAppearance(otherController, false);
+}
+
 function updateVRMovement(deltaSeconds) {
   if (!renderer.xr.isPresenting || !worldRoot) return;
+
+  updateVRPointerState();
+
+  if (isPanelVisible()) {
+    vrInput.right = null;
+    return;
+  }
+
+  if (vrGrabState.active && vrGrabState.controller) {
+    vrGrabState.controller.getWorldPosition(vrGrabState.startControllerPosition);
+    const dragOffset = vrGrabState.startControllerPosition.clone().sub(vrGrabState.startWorldPosition);
+    worldRoot.position.copy(vrGrabState.startWorldPosition).add(dragOffset);
+    return;
+  }
 
   updateVRInputSources();
   const zoomAxes = vrInput.right;
@@ -514,12 +719,13 @@ function updateVRMovement(deltaSeconds) {
     const rotateX = applyDeadZone(zoomAxes.x, vrRotateConfig.deadZone);
 
     if (zoomY !== 0) {
-      vrWorldScale -= zoomY * vrZoomConfig.speed * deltaSeconds;
-      vrWorldScale = THREE.MathUtils.clamp(vrWorldScale, vrZoomConfig.minScale, vrZoomConfig.maxScale);
-      worldRoot.scale.setScalar(vrWorldScale);
+      closeRegionInfo();
+      worldRoot.position.z -= zoomY * vrZoomConfig.speed * deltaSeconds;
+      worldRoot.position.z = THREE.MathUtils.clamp(worldRoot.position.z, vrZoomConfig.minZ, vrZoomConfig.maxZ);
     }
 
     if (rotateX !== 0) {
+      closeRegionInfo();
       worldRoot.rotation.y -= rotateX * vrRotateConfig.speed * deltaSeconds;
     }
   }
@@ -533,7 +739,11 @@ function onWindowResize() {
 
 function onDocumentClick(event) {
   // Skip if mouse is over UI elements
-  if (event.target.closest('#panel') || event.target.closest('#regionInfo') !== null) {
+  if (
+    event.target.closest('#panel') ||
+    event.target.closest('#panelToggle') ||
+    event.target.closest('#regionInfo') !== null
+  ) {
     return;
   }
 
@@ -682,8 +892,8 @@ function showRegionInfo(region, clickPoint) {
   const margin = 10;
   const offsetRight = 14;
 
-  const baseX = clickPoint?.x ?? window.innerWidth * 0.5;
-  const baseY = clickPoint?.y ?? window.innerHeight * 0.5;
+  const baseX = clickPoint?.x ?? (renderer?.xr?.isPresenting ? window.innerWidth - panelWidth - 24 : window.innerWidth * 0.5);
+  const baseY = clickPoint?.y ?? (renderer?.xr?.isPresenting ? 112 : window.innerHeight * 0.5);
 
   let finalX = baseX + offsetRight;
   let finalY = baseY - panelHeight * 0.5;
@@ -712,7 +922,7 @@ function showRegionInfo(region, clickPoint) {
 
 function closeRegionInfo() {
   const panel = document.getElementById('regionInfo');
-  panel.classList.add('hidden');
+  if (panel) panel.classList.add('hidden');
 }
 
 function animate() {

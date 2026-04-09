@@ -170,10 +170,11 @@ export function getRegionAtRay(raycaster, regionsGroup) {
   const intersects = raycaster.intersectObject(regionsGroup, true);
   
   if (intersects.length > 0) {
-    // Find first intersection that's a marker (has userData)
+    // Only return city/capital markers or labels, not large region labels.
     for (let i = 0; i < intersects.length; i++) {
-      if (intersects[i].object.userData?.name) {
-        return intersects[i].object.userData;
+      const region = intersects[i].object.userData;
+      if (region?.name && !region.isRegion) {
+        return region;
       }
     }
   }
