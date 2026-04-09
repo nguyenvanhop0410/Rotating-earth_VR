@@ -300,7 +300,7 @@ function init() {
     getCoordinatesMapEnabled: () => coordinatesOverlayEnabled,
     setCoordinatesMapEnabled: (enabled) => {
       coordinatesOverlayEnabled = enabled;
-      if (coordinatesMesh) coordinatesMesh.visible = enabled;
+      if (coordinatesMesh) coordinatesMesh.visible = false;
       if (geoOverlayGroup) geoOverlayGroup.visible = enabled;
     },
     onResetView: () => {
@@ -311,7 +311,7 @@ function init() {
     onViewSun: () => applyCameraPreset('sun')
   });
 
-  if (coordinatesMesh) coordinatesMesh.visible = coordinatesOverlayEnabled;
+  if (coordinatesMesh) coordinatesMesh.visible = false;
   syncPanelToggleButton();
   if (geoOverlayGroup) geoOverlayGroup.visible = coordinatesOverlayEnabled;
 
@@ -533,7 +533,7 @@ function rebuildSpaceEnvironment() {
   }
 
   if (coordinatesMesh) {
-    coordinatesMesh.visible = coordinatesOverlayEnabled;
+    coordinatesMesh.visible = false;
   }
   if (geoOverlayGroup) {
     geoOverlayGroup.visible = coordinatesOverlayEnabled;

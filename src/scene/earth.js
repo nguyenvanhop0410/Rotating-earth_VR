@@ -122,7 +122,7 @@ function createCoordinatesLayer({ earthRadius }) {
   const material = new THREE.MeshBasicMaterial({
     map: tex,
     transparent: true,
-    opacity: 0.96,
+    opacity: 0.44,
     depthWrite: false
   });
 
@@ -143,26 +143,27 @@ function createCoordinatesTexture({ width, height }) {
 
   ctx.clearRect(0, 0, width, height);
   ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
 
-  for (let lat = -80; lat <= 80; lat += 10) {
+  for (let lat = -60; lat <= 60; lat += 30) {
+    if (lat === 0) continue;
     const y = ((90 - lat) / 180) * height;
-    const major = lat % 30 === 0;
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(width, y);
-    ctx.lineWidth = major ? 2.2 : 1.1;
-    ctx.strokeStyle = major ? 'rgba(188, 226, 255, 0.7)' : 'rgba(166, 206, 236, 0.38)';
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(164, 205, 232, 0.08)';
     ctx.stroke();
   }
 
-  for (let lon = -180; lon <= 180; lon += 10) {
+  for (let lon = -150; lon <= 150; lon += 30) {
+    if (lon === 0) continue;
     const x = ((lon + 180) / 360) * width;
-    const major = lon % 30 === 0;
     ctx.beginPath();
     ctx.moveTo(x, 0);
     ctx.lineTo(x, height);
-    ctx.lineWidth = major ? 2.2 : 1.1;
-    ctx.strokeStyle = major ? 'rgba(188, 226, 255, 0.7)' : 'rgba(166, 206, 236, 0.38)';
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(164, 205, 232, 0.08)';
     ctx.stroke();
   }
 
@@ -171,21 +172,18 @@ function createCoordinatesTexture({ width, height }) {
   ctx.beginPath();
   ctx.moveTo(primeMeridianX, 0);
   ctx.lineTo(primeMeridianX, height);
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = 'rgba(255, 219, 89, 0.92)';
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = 'rgba(147, 217, 255, 0.12)';
   ctx.stroke();
 
   const equatorY = height * 0.5;
   ctx.beginPath();
   ctx.moveTo(0, equatorY);
   ctx.lineTo(width, equatorY);
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = 'rgba(255, 117, 117, 0.92)';
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = 'rgba(255, 169, 169, 0.12)';
   ctx.stroke();
 
-  ctx.font = '600 34px Sora, Arial, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
   ctx.fillStyle = 'rgba(255, 117, 117, 0.95)';
   ctx.fillText('Xich dao 0°', width * 0.18, equatorY - 24);
 

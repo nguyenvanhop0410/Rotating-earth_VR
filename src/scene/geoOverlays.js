@@ -17,8 +17,8 @@ export async function createGeoOverlayGroup({
     fetchGeoJson(graticulesUrl)
   ]);
 
-  const borderLines = buildCountryBorders(countries, earthRadius * 1.0175);
-  const graticuleLines = buildGraticules(graticules, earthRadius * 1.0165);
+  const borderLines = buildCountryBorders(countries, earthRadius * 1.0022);
+  const graticuleLines = buildGraticules(graticules, earthRadius * 1.0032);
 
   overlayGroup.add(graticuleLines);
   overlayGroup.add(borderLines);
@@ -38,19 +38,20 @@ async function fetchGeoJson(url) {
 function buildCountryBorders(featureCollection, radius) {
   const group = new THREE.Group();
   group.name = 'country-borders';
+  const borderMaterial = createBorderMaterial();
 
   for (const feature of featureCollection?.features || []) {
     const geometry = feature?.geometry;
     if (!geometry) continue;
 
     if (geometry.type === 'Polygon') {
-      addPolygonRings(group, geometry.coordinates, radius, createBorderMaterial());
+      addPolygonRings(group, geometry.coordinates, radius, borderMaterial);
       continue;
     }
 
     if (geometry.type === 'MultiPolygon') {
       for (const polygon of geometry.coordinates) {
-        addPolygonRings(group, polygon, radius, createBorderMaterial());
+        addPolygonRings(group, polygon, radius, borderMaterial);
       }
     }
   }
@@ -61,11 +62,11 @@ function buildCountryBorders(featureCollection, radius) {
 function buildGraticules(featureCollection, radius) {
   const group = new THREE.Group();
   group.name = 'graticules';
-  const material = createGraticuleMaterial();
 
   for (const feature of featureCollection?.features || []) {
     const geometry = feature?.geometry;
     if (!geometry) continue;
+    const material = createGraticuleMaterial(feature?.properties);
 
     if (geometry.type === 'LineString') {
       addLineString(group, geometry.coordinates, radius, material);
@@ -105,7 +106,7 @@ function addLineString(group, coordinates, radius, material, closed = false) {
   if (points.length < 2) return;
 
   const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  const line = new THREE.Line(geometry, material.clone());
+  const line = new THREE.Line(geometry, material);
   line.renderOrder = 11;
   group.add(line);
 }
@@ -164,18 +165,43 @@ function normalizeLongitude(lon) {
 
 function createBorderMaterial() {
   return new THREE.LineBasicMaterial({
-    color: 0xffdd8a,
+    color: 0xf3ead6,
     transparent: true,
-    opacity: 0.85,
-    depthWrite: false
+    opacity: 0.58,
+    depthWrite: false,
+    depthTest: true
   });
 }
 
-function createGraticuleMaterial() {
+function createGraticuleMaterial(properties = {}) {
+  const degreeValue = Math.abs(Number(properties.dd ?? properties.degrees ?? 0));
+  const isEquator = degreeValue === 0 && (properties.direction === 'N' || properties.direction === 'S');
+  const isPrimeMeridian = degreeValue === 0 && (properties.direction === 'E' || properties.direction === 'W');
+  const isMajor = degreeValue !== 0 && degreeValue % 30 === 0;
+
+  let color = 0xb8d9ef;
+  let opacity = 0.15;
+
+  if (isMajor) {
+    color = 0xe3f3ff;
+    opacity = 0.24;
+  }
+
+  if (isEquator) {
+    color = 0xffb3b3;
+    opacity = 0.38;
+  }
+
+  if (isPrimeMeridian) {
+    color = 0xa9e4ff;
+    opacity = 0.34;
+  }
+
   return new THREE.LineBasicMaterial({
-    color: 0x9ad7ff,
+    color,
     transparent: true,
-    opacity: 0.36,
-    depthWrite: false
+    opacity,
+    depthWrite: false,
+    depthTest: true
   });
 }
