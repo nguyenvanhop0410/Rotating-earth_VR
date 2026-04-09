@@ -11,12 +11,14 @@ import { createEarth } from './scene/earth.js';
 import { createMoon } from './scene/moon.js';
 import { createSatellite } from './scene/satellite.js';
 import { createRegionLabels, getRegionAtRay, updateRegionLabels } from './scene/regions.js';
+import { findCountryNameAtLonLat, loadCountryFeatures } from './scene/countryLookup.js';
 
 let camera, scene, renderer;
 let controls;
 let earthGroup, earthMesh, cloudsMesh;
 let coordinatesOverlayEnabled = false;
 let coordinatesMesh;
+let geoOverlayGroup;
 let updateMoon;
 let updateSatellite;
 let regionsGroup;
@@ -93,6 +95,7 @@ const TIME_CACHE_TTL_MS = 60 * 1000;
 const timeCache = new Map();
 let activeRegionTimeRequest = 0;
 let cameraTransition = null;
+let countryLookupReady = false;
 
 const CITY_TIMEZONE_IDS = {
   'New York': 'America/New_York',
@@ -188,6 +191,7 @@ function init() {
   earthMesh = earth.earthMesh;
   cloudsMesh = earth.cloudsMesh;
   coordinatesMesh = earth.coordinatesMesh;
+  geoOverlayGroup = earth.geoOverlayGroup;
   worldRoot.add(earthGroup);
 
   // Region labels (attach to earthMesh so they rotate with Earth spin)
@@ -297,6 +301,7 @@ function init() {
     setCoordinatesMapEnabled: (enabled) => {
       coordinatesOverlayEnabled = enabled;
       if (coordinatesMesh) coordinatesMesh.visible = enabled;
+      if (geoOverlayGroup) geoOverlayGroup.visible = enabled;
     },
     onResetView: () => {
       applyCameraPreset('default');
@@ -308,6 +313,15 @@ function init() {
 
   if (coordinatesMesh) coordinatesMesh.visible = coordinatesOverlayEnabled;
   syncPanelToggleButton();
+  if (geoOverlayGroup) geoOverlayGroup.visible = coordinatesOverlayEnabled;
+
+  loadCountryFeatures(new URL('../assets/geojson/countries.json', import.meta.url))
+    .then(() => {
+      countryLookupReady = true;
+    })
+    .catch(() => {
+      countryLookupReady = false;
+    });
 }
 
 function startCameraTransition(targetPosition, targetLookAt, durationSec = 0.9, targetFov = camera?.fov ?? 72) {
@@ -520,6 +534,9 @@ function rebuildSpaceEnvironment() {
 
   if (coordinatesMesh) {
     coordinatesMesh.visible = coordinatesOverlayEnabled;
+  }
+  if (geoOverlayGroup) {
+    geoOverlayGroup.visible = coordinatesOverlayEnabled;
   }
 }
 
@@ -750,8 +767,56 @@ function onDocumentClick(event) {
       return;
     }
   }
-  
+
+  const earthHits = raycaster.intersectObject(earthMesh, false);
+  if (earthHits.length > 0) {
+    showEarthSurfaceInfo(earthHits[0].point, {
+      x: event.clientX,
+      y: event.clientY
+    });
+    return;
+  }
+
   closeRegionInfo();
+}
+
+function normalizeLongitude(lon) {
+  let normalized = lon;
+
+  while (normalized <= -180) normalized += 360;
+  while (normalized > 180) normalized -= 360;
+
+  return normalized;
+}
+
+function formatUtcOffset(hours) {
+  const roundedHours = Math.round(hours * 2) / 2;
+  const sign = roundedHours >= 0 ? '+' : '-';
+  const absoluteHours = Math.abs(roundedHours);
+  const wholeHours = Math.floor(absoluteHours);
+  const minutes = Math.round((absoluteHours - wholeHours) * 60);
+
+  if (minutes === 0) {
+    return `UTC${sign}${wholeHours}`;
+  }
+
+  return `UTC${sign}${wholeHours}:${String(minutes).padStart(2, '0')}`;
+}
+
+function getUtcClockText(date = new Date()) {
+  return date.toUTCString().slice(17, 25);
+}
+
+function getEstimatedSurfaceTime(lon) {
+  const utcMs = Date.now();
+  const offsetHours = lon / 15;
+  const localMs = utcMs + offsetHours * 3600 * 1000;
+
+  return {
+    utcTime: getUtcClockText(new Date(utcMs)),
+    localTime: getUtcClockText(new Date(localMs)),
+    timezone: formatUtcOffset(offsetHours)
+  };
 }
 
 function resolveTimeZoneId(region) {
@@ -846,6 +911,21 @@ async function updateRegionTimes(region, requestId) {
 }
 
 function showRegionInfo(region, clickPoint) {
+  const countryRow = document.getElementById('regionCountryRow');
+  countryRow.hidden = true;
+
+  showLocationInfo({
+    title: region.name,
+    lat: region.lat,
+    lon: region.lon,
+    timezone: region.timezone || 'N/A'
+  }, clickPoint);
+
+  activeRegionTimeRequest += 1;
+  const currentRequestId = activeRegionTimeRequest;
+  updateRegionTimes(region, currentRequestId);
+  return;
+
   const panel = document.getElementById('regionInfo');
   document.getElementById('regionName').textContent = region.name;
   document.getElementById('regionLat').textContent = `${region.lat.toFixed(2)}°`;
@@ -886,9 +966,71 @@ function showRegionInfo(region, clickPoint) {
   updateRegionTimes(region, requestId);
 }
 
+function showEarthSurfaceInfo(worldPoint, clickPoint) {
+  const localPoint = earthMesh.worldToLocal(worldPoint.clone());
+  const radius = localPoint.length() || 1;
+  const lat = THREE.MathUtils.radToDeg(Math.asin(localPoint.y / radius));
+  const lon = normalizeLongitude(THREE.MathUtils.radToDeg(Math.atan2(-localPoint.z, localPoint.x)));
+  const countryName = countryLookupReady
+    ? (findCountryNameAtLonLat(lon, lat) || 'Ocean / unknown')
+    : 'Country data unavailable';
+  const estimatedTime = getEstimatedSurfaceTime(lon);
+  const countryRow = document.getElementById('regionCountryRow');
+  const countryValue = document.getElementById('regionCountry');
+
+  countryValue.textContent = countryName;
+  countryRow.hidden = false;
+
+  showLocationInfo({
+    title: 'Surface point on Earth',
+    lat,
+    lon,
+    timezone: estimatedTime.timezone,
+    currentTime: estimatedTime.localTime,
+    utcTime: estimatedTime.utcTime
+  }, clickPoint);
+}
+
+function showLocationInfo(location, clickPoint) {
+  const panel = document.getElementById('regionInfo');
+  document.getElementById('regionName').textContent = location.title;
+  document.getElementById('regionLat').textContent = `${location.lat.toFixed(2)}°`;
+  document.getElementById('regionLon').textContent = `${location.lon.toFixed(2)}°`;
+  document.getElementById('regionTimezone').textContent = location.timezone || 'N/A';
+  document.getElementById('regionCurrentTime').textContent = location.currentTime || '--:--:--';
+  document.getElementById('regionUtcTime').textContent = location.utcTime || '--:--:--';
+
+  const panelWidth = 320;
+  const panelHeight = 160;
+  const margin = 10;
+  const offsetRight = 14;
+
+  const baseX = clickPoint?.x ?? window.innerWidth * 0.5;
+  const baseY = clickPoint?.y ?? window.innerHeight * 0.5;
+
+  let finalX = baseX + offsetRight;
+  let finalY = baseY - panelHeight * 0.5;
+
+  if (finalX + panelWidth > window.innerWidth - margin) {
+    finalX = window.innerWidth - panelWidth - margin;
+  }
+
+  if (finalY < margin) {
+    finalY = margin;
+  }
+  if (finalY + panelHeight > window.innerHeight - margin) {
+    finalY = window.innerHeight - panelHeight - margin;
+  }
+
+  panel.style.left = `${Math.max(margin, finalX)}px`;
+  panel.style.top = `${finalY}px`;
+  panel.classList.remove('hidden');
+}
+
 function closeRegionInfo() {
   const panel = document.getElementById('regionInfo');
   if (panel) panel.classList.add('hidden');
+  activeRegionTimeRequest += 1;
 }
 
 function animate() {

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createGeoOverlayGroup } from './geoOverlays.js';
 
 export function createEarth({ settings, sunDirection = new THREE.Vector3(30, 0.5, -6) }) {
   // Earth group
@@ -17,6 +18,23 @@ export function createEarth({ settings, sunDirection = new THREE.Vector3(30, 0.5
 
   const coordinatesLayer = createCoordinatesLayer({ earthRadius: settings.earthRadius });
   earthMesh.add(coordinatesLayer.mesh);
+
+  const geoOverlayGroup = new THREE.Group();
+  geoOverlayGroup.name = 'geo-overlays';
+  geoOverlayGroup.visible = false;
+  earthMesh.add(geoOverlayGroup);
+
+  createGeoOverlayGroup({
+    earthRadius: settings.earthRadius,
+    countriesUrl: new URL('../../assets/geojson/countries.json', import.meta.url),
+    graticulesUrl: new URL('../../assets/geojson/ne_110m_graticules_5.json', import.meta.url)
+  })
+    .then((group) => {
+      geoOverlayGroup.add(...group.children);
+    })
+    .catch(() => {
+      // Keep the Earth visible even if overlay data fails to load.
+    });
 
   // Optional realism textures (if present / reachable)
   if (settings.enableRealTextures && settings.style === 'realistic') {
@@ -88,7 +106,8 @@ export function createEarth({ settings, sunDirection = new THREE.Vector3(30, 0.5
     atmosphereMesh,
     axisMesh,
     cityLightsMesh: cityLightsLayer.mesh,
-    coordinatesMesh: coordinatesLayer.mesh
+    coordinatesMesh: coordinatesLayer.mesh,
+    geoOverlayGroup
   };
 }
 
