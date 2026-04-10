@@ -34,8 +34,6 @@ const isMobileLike = /Mobi|Android|iPhone|iPad|Quest/i.test(navigator.userAgent)
 let performanceMode = isMobileLike ? 'vrSmooth' : 'balanced';
 let starfield;
 const vrZoomConfig = {
-  minZ: -6.1,
-  maxZ: -4.65,
   speed: 0.72
 };
 const vrRotateConfig = {
@@ -93,6 +91,34 @@ const TIME_CACHE_TTL_MS = 60 * 1000;
 const timeCache = new Map();
 let activeRegionTimeRequest = 0;
 let cameraTransition = null;
+let vrQuickMenuOpen = false;
+let vrQuickMenuIndex = 0;
+let vrQuickMenuNavLatched = false;
+let vrQuickMenuAdjustLatched = false;
+let vrMenuGroup;
+let vrMenuTexture;
+let vrMenuCanvas;
+let vrMenuContext;
+
+const vrMenu3DConfig = {
+  distance: 1.18,
+  sideOffset: 0.34,
+  verticalOffset: -0.02,
+  width: 0.94,
+  height: 0.64
+};
+
+const _tmpMenuCameraPos = new THREE.Vector3();
+const _tmpMenuForward = new THREE.Vector3();
+const _tmpMenuRight = new THREE.Vector3();
+const _tmpMenuUp = new THREE.Vector3();
+const _tmpMenuQuat = new THREE.Quaternion();
+
+const infoDefaultLines = [
+  'Realistic Earth (Space Scene)',
+  'VR tay phải: Thumbstick Y = zoom không giới hạn, Thumbstick X = xoay Trái Đất',
+  'Grip tay phải: mở/đóng menu VR | Cò + laser: chọn thành phố hoặc chọn mục menu'
+];
 
 const CITY_TIMEZONE_IDS = {
   'New York': 'America/New_York',
@@ -148,11 +174,7 @@ function init() {
 
   const infoEl = document.getElementById('info');
   if (infoEl) {
-    infoEl.innerHTML = [
-      'Realistic Earth (Space Scene)',
-      'VR tay phải: Thumbstick Y = zoom, Thumbstick X = xoay Trái Đất',
-      'Trigger hoặc Grip: chỉ dùng để mở bảng điều khiển'
-    ].join('<br>');
+    infoEl.innerHTML = infoDefaultLines.join('<br>');
   }
 
   // Camera
@@ -244,14 +266,12 @@ function init() {
   controller1.addEventListener('disconnected', onControllerDisconnected);
   controller1.addEventListener('selectstart', onControllerSelectStart);
   controller1.addEventListener('selectend', onControllerSelectEnd);
-  controller1.addEventListener('squeezestart', onControllerGrabStart);
-  controller1.addEventListener('squeezeend', onControllerGrabEnd);
+  controller1.addEventListener('squeezestart', onControllerPanelToggle);
   controller2.addEventListener('connected', onControllerConnected);
   controller2.addEventListener('disconnected', onControllerDisconnected);
   controller2.addEventListener('selectstart', onControllerSelectStart);
   controller2.addEventListener('selectend', onControllerSelectEnd);
-  controller2.addEventListener('squeezestart', onControllerGrabStart);
-  controller2.addEventListener('squeezeend', onControllerGrabEnd);
+  controller2.addEventListener('squeezestart', onControllerPanelToggle);
 
   renderer.xr.addEventListener('sessionstart', onXRSessionStart);
   renderer.xr.addEventListener('sessionend', onXRSessionEnd);
@@ -306,8 +326,11 @@ function init() {
     onViewSun: () => applyCameraPreset('sun')
   });
 
+  initVrQuickMenuPanel3D();
+
   if (coordinatesMesh) coordinatesMesh.visible = coordinatesOverlayEnabled;
   syncPanelToggleButton();
+  updateInfoDisplay();
 }
 
 function startCameraTransition(targetPosition, targetLookAt, durationSec = 0.9, targetFov = camera?.fov ?? 72) {
@@ -336,6 +359,7 @@ function resetVRWorldTransform() {
 
 function onXRSessionStart() {
   resetVRWorldTransform();
+  setVrQuickMenuOpen(false);
   setPanelVisibility(false);
   closeRegionInfo();
   setControllerRayAppearance(controller1, false);
@@ -343,6 +367,7 @@ function onXRSessionStart() {
 }
 
 function onXRSessionEnd() {
+  setVrQuickMenuOpen(false);
   setPanelVisibility(true);
   closeRegionInfo();
   vrInput.right = null;
@@ -375,6 +400,347 @@ function setPanelVisibility(visible) {
 function togglePanelVisibility(forceVisible) {
   const visible = typeof forceVisible === 'boolean' ? forceVisible : !isPanelVisible();
   setPanelVisibility(visible);
+}
+
+function setVrQuickMenuOpen(nextOpen) {
+  vrQuickMenuOpen = !!nextOpen;
+  vrQuickMenuNavLatched = false;
+  vrQuickMenuAdjustLatched = false;
+
+  if (vrMenuGroup) {
+    vrMenuGroup.visible = !!(renderer?.xr?.isPresenting && vrQuickMenuOpen);
+  }
+
+  if (vrQuickMenuOpen) {
+    updateVrQuickMenuPanelVisual();
+    updateVrQuickMenuPanelPose();
+  }
+
+  updateInfoDisplay();
+}
+
+function initVrQuickMenuPanel3D() {
+  if (vrMenuGroup || !scene) return;
+
+  vrMenuCanvas = document.createElement('canvas');
+  vrMenuCanvas.width = 1024;
+  vrMenuCanvas.height = 768;
+  vrMenuContext = vrMenuCanvas.getContext('2d');
+  if (!vrMenuContext) return;
+
+  vrMenuTexture = new THREE.CanvasTexture(vrMenuCanvas);
+  vrMenuTexture.minFilter = THREE.LinearFilter;
+  vrMenuTexture.magFilter = THREE.LinearFilter;
+  vrMenuTexture.generateMipmaps = false;
+
+  const panelGeometry = new THREE.PlaneGeometry(vrMenu3DConfig.width, vrMenu3DConfig.height);
+  const panelMaterial = new THREE.MeshBasicMaterial({
+    map: vrMenuTexture,
+    transparent: true,
+    depthWrite: false
+  });
+  const panelMesh = new THREE.Mesh(panelGeometry, panelMaterial);
+  panelMesh.renderOrder = 1200;
+
+  const glowGeometry = new THREE.PlaneGeometry(vrMenu3DConfig.width * 1.025, vrMenu3DConfig.height * 1.04);
+  const glowMaterial = new THREE.MeshBasicMaterial({
+    color: 0x6ad7ff,
+    transparent: true,
+    opacity: 0.08,
+    depthWrite: false
+  });
+  const glowMesh = new THREE.Mesh(glowGeometry, glowMaterial);
+  glowMesh.position.z = -0.002;
+  glowMesh.renderOrder = 1199;
+
+  vrMenuGroup = new THREE.Group();
+  vrMenuGroup.visible = false;
+  vrMenuGroup.add(glowMesh);
+  vrMenuGroup.add(panelMesh);
+  scene.add(vrMenuGroup);
+
+  updateVrQuickMenuPanelVisual();
+}
+
+function updateVrQuickMenuPanelPose() {
+  if (!vrMenuGroup || !camera) return;
+
+  camera.getWorldPosition(_tmpMenuCameraPos);
+  camera.getWorldDirection(_tmpMenuForward).normalize();
+  _tmpMenuRight.crossVectors(_tmpMenuForward, camera.up).normalize();
+  _tmpMenuUp.crossVectors(_tmpMenuRight, _tmpMenuForward).normalize();
+
+  vrMenuGroup.position.copy(_tmpMenuCameraPos)
+    .addScaledVector(_tmpMenuForward, vrMenu3DConfig.distance)
+    .addScaledVector(_tmpMenuRight, vrMenu3DConfig.sideOffset)
+    .addScaledVector(_tmpMenuUp, vrMenu3DConfig.verticalOffset);
+
+  camera.getWorldQuaternion(_tmpMenuQuat);
+  vrMenuGroup.quaternion.copy(_tmpMenuQuat);
+}
+
+function drawRoundedRect(ctx, x, y, width, height, radius, fillStyle, strokeStyle) {
+  const r = Math.min(radius, width * 0.5, height * 0.5);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+
+  if (fillStyle) {
+    ctx.fillStyle = fillStyle;
+    ctx.fill();
+  }
+  if (strokeStyle) {
+    ctx.strokeStyle = strokeStyle;
+    ctx.stroke();
+  }
+}
+
+function updateVrQuickMenuPanelVisual() {
+  if (!vrMenuContext || !vrMenuCanvas || !vrMenuTexture) return;
+
+  const ctx = vrMenuContext;
+  const width = vrMenuCanvas.width;
+  const height = vrMenuCanvas.height;
+  const items = getVrQuickMenuItems();
+  const selected = THREE.MathUtils.clamp(vrQuickMenuIndex, 0, Math.max(0, items.length - 1));
+  vrQuickMenuIndex = selected;
+
+  const gradient = ctx.createLinearGradient(0, 0, width, height);
+  gradient.addColorStop(0, 'rgba(6, 15, 34, 0.96)');
+  gradient.addColorStop(1, 'rgba(3, 8, 22, 0.96)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, width, height);
+
+  drawRoundedRect(ctx, 22, 22, width - 44, height - 44, 30, 'rgba(10, 24, 52, 0.66)', 'rgba(134, 204, 255, 0.45)');
+
+  ctx.fillStyle = '#d7efff';
+  ctx.font = '700 42px Sora, Segoe UI, sans-serif';
+  ctx.fillText('VR Quick Menu', 64, 92);
+  ctx.font = '500 23px Sora, Segoe UI, sans-serif';
+  ctx.fillStyle = 'rgba(202, 226, 255, 0.92)';
+  ctx.fillText('Tay phải: Thumbstick Y đổi mục | X chỉnh giá trị | Cò để chọn', 64, 128);
+
+  const visibleCount = 8;
+  const maxStart = Math.max(0, items.length - visibleCount);
+  const startIndex = Math.min(maxStart, Math.max(0, selected - Math.floor(visibleCount / 2)));
+  const endIndex = Math.min(items.length, startIndex + visibleCount);
+  const rowHeight = 64;
+  const baseY = 176;
+
+  for (let i = startIndex; i < endIndex; i++) {
+    const row = i - startIndex;
+    const y = baseY + row * rowHeight;
+    const item = items[i];
+    const valueText = formatQuickMenuValue(item);
+    const isActive = i === selected;
+
+    if (isActive) {
+      const pulse = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(performance.now() * 0.009));
+      drawRoundedRect(
+        ctx,
+        54,
+        y - 38,
+        width - 108,
+        50,
+        14,
+        `rgba(102, 214, 255, ${0.2 + pulse * 0.3})`,
+        `rgba(176, 236, 255, ${0.5 + pulse * 0.35})`
+      );
+    }
+
+    ctx.font = isActive ? '700 30px Sora, Segoe UI, sans-serif' : '600 28px Sora, Segoe UI, sans-serif';
+    ctx.fillStyle = isActive ? '#f2fbff' : '#c4ddff';
+    ctx.fillText(`${i + 1}. ${item.label}`, 74, y);
+
+    ctx.font = isActive ? '700 26px Sora, Segoe UI, sans-serif' : '500 24px Sora, Segoe UI, sans-serif';
+    ctx.fillStyle = isActive ? '#fff5bf' : 'rgba(236, 244, 255, 0.82)';
+    ctx.textAlign = 'right';
+    ctx.fillText(valueText, width - 76, y);
+    ctx.textAlign = 'left';
+  }
+
+  if (items.length > visibleCount) {
+    ctx.font = '500 21px Sora, Segoe UI, sans-serif';
+    ctx.fillStyle = 'rgba(191, 220, 255, 0.82)';
+    ctx.fillText(`Hiển thị ${startIndex + 1}-${endIndex} / ${items.length}`, 64, height - 48);
+  }
+
+  vrMenuTexture.needsUpdate = true;
+}
+
+function getVrQuickMenuItems() {
+  return [
+    { type: 'action', label: 'Reset góc nhìn', execute: () => applyCameraPreset('default') },
+    { type: 'action', label: 'Góc nhìn vệ tinh', execute: () => applyCameraPreset('satellite') },
+    { type: 'action', label: 'Góc nhìn Mặt Trăng', execute: () => applyCameraPreset('moon') },
+    { type: 'action', label: 'Góc nhìn Mặt Trời', execute: () => applyCameraPreset('sun') },
+    {
+      type: 'range',
+      label: 'Tốc độ quay Trái Đất',
+      min: 0,
+      max: 0.02,
+      step: 0.0005,
+      get: () => SETTINGS.earthSpin,
+      set: (value) => {
+        SETTINGS.earthSpin = value;
+      }
+    },
+    {
+      type: 'range',
+      label: 'Tốc độ quay mây',
+      min: 0,
+      max: 0.03,
+      step: 0.0005,
+      get: () => SETTINGS.cloudsSpin,
+      set: (value) => {
+        SETTINGS.cloudsSpin = value;
+      }
+    },
+    {
+      type: 'range',
+      label: 'Ánh sáng Mặt Trời',
+      min: 0,
+      max: 10,
+      step: 0.1,
+      get: () => (keySunLight ? keySunLight.intensity : 0),
+      set: (value) => {
+        if (keySunLight) keySunLight.intensity = value;
+      }
+    },
+    {
+      type: 'range',
+      label: 'Exposure',
+      min: 0.6,
+      max: 1.8,
+      step: 0.05,
+      get: () => (renderer ? renderer.toneMappingExposure : 1),
+      set: (value) => {
+        if (renderer) renderer.toneMappingExposure = value;
+      }
+    },
+    {
+      type: 'toggle',
+      label: 'Hiện địa danh',
+      get: () => !!regionsGroup?.visible,
+      set: (enabled) => {
+        if (regionsGroup) regionsGroup.visible = enabled;
+      }
+    },
+    {
+      type: 'toggle',
+      label: 'Hiện sao',
+      get: () => !!SETTINGS.enableStars,
+      set: (enabled) => {
+        SETTINGS.enableStars = enabled;
+        rebuildSpaceEnvironment();
+      }
+    },
+    {
+      type: 'toggle',
+      label: 'Bản đồ tọa độ',
+      get: () => !!coordinatesOverlayEnabled,
+      set: (enabled) => {
+        coordinatesOverlayEnabled = enabled;
+        if (coordinatesMesh) coordinatesMesh.visible = enabled;
+      }
+    }
+  ];
+}
+
+function formatQuickMenuValue(item) {
+  if (item.type === 'toggle') {
+    return item.get() ? 'Bật' : 'Tắt';
+  }
+
+  if (item.type === 'range') {
+    const value = Number(item.get());
+    const digits = item.step >= 0.1 ? 1 : item.step >= 0.01 ? 2 : 4;
+    return value.toFixed(digits);
+  }
+
+  return 'Nhấn cò để chạy';
+}
+
+function updateInfoDisplay() {
+  const infoEl = document.getElementById('info');
+  if (!infoEl) return;
+
+  if (!renderer?.xr?.isPresenting || !vrQuickMenuOpen) {
+    infoEl.innerHTML = infoDefaultLines.join('<br>');
+    return;
+  }
+
+  infoEl.innerHTML = [
+    'VR Quick Menu đang mở (panel 3D trước mặt)',
+    'Thumbstick Y: đổi mục | X: chỉnh giá trị',
+    'Cò: chọn | Grip tay phải: đóng menu'
+  ].join('<br>');
+}
+
+function applyVrQuickMenuSelection() {
+  const items = getVrQuickMenuItems();
+  const item = items[vrQuickMenuIndex];
+  if (!item) return;
+
+  if (item.type === 'action') {
+    item.execute();
+  } else if (item.type === 'toggle') {
+    item.set(!item.get());
+  }
+
+  updateVrQuickMenuPanelVisual();
+  updateInfoDisplay();
+}
+
+function updateVrQuickMenuFromAxes() {
+  const rightController = getRightController();
+  const axes = extractPrimaryAxes(rightController?.userData?.inputSource);
+  if (!axes) {
+    vrQuickMenuNavLatched = false;
+    vrQuickMenuAdjustLatched = false;
+    return;
+  }
+
+  const navThreshold = 0.62;
+  const resetThreshold = 0.3;
+  const adjustThreshold = 0.62;
+  const items = getVrQuickMenuItems();
+
+  if (!vrQuickMenuNavLatched && Math.abs(axes.y) >= navThreshold && items.length > 0) {
+    vrQuickMenuIndex = (vrQuickMenuIndex + (axes.y > 0 ? 1 : -1) + items.length) % items.length;
+    vrQuickMenuNavLatched = true;
+    updateVrQuickMenuPanelVisual();
+    updateInfoDisplay();
+  } else if (Math.abs(axes.y) <= resetThreshold) {
+    vrQuickMenuNavLatched = false;
+  }
+
+  const active = items[vrQuickMenuIndex];
+  if (active?.type === 'range') {
+    if (!vrQuickMenuAdjustLatched && Math.abs(axes.x) >= adjustThreshold) {
+      const nextValue = THREE.MathUtils.clamp(
+        active.get() + (axes.x > 0 ? active.step : -active.step),
+        active.min,
+        active.max
+      );
+      active.set(nextValue);
+      vrQuickMenuAdjustLatched = true;
+      updateVrQuickMenuPanelVisual();
+      updateInfoDisplay();
+    } else if (Math.abs(axes.x) <= resetThreshold) {
+      vrQuickMenuAdjustLatched = false;
+    }
+  } else {
+    vrQuickMenuAdjustLatched = false;
+  }
 }
 
 function setControlDistanceRange(minDistance, maxDistance) {
@@ -546,16 +912,18 @@ function onControllerDisconnected(event) {
   setControllerRayAppearance(controller, false);
 }
 
-function onControllerGrabStart(event) {
-  void event;
+function onControllerPanelToggle(event) {
   if (!renderer.xr.isPresenting) return;
 
-  closeRegionInfo();
-  setPanelVisibility(true);
-}
+  const controller = event.target;
+  const rightController = getRightController();
+  if (controller !== rightController && controller?.userData?.handedness === 'left') {
+    return;
+  }
 
-function onControllerGrabEnd(event) {
-  void event;
+  setVrQuickMenuOpen(!vrQuickMenuOpen);
+  setPanelVisibility(false);
+  closeRegionInfo();
 }
 
 function addControllerRay(controller) {
@@ -578,12 +946,22 @@ function onControllerSelectStart(event) {
   if (!renderer.xr.isPresenting) return;
 
   const controller = event.target;
+  const rightController = getRightController();
+  if (controller !== rightController && controller?.userData?.handedness === 'left') {
+    return;
+  }
+
   controller.updateMatrixWorld(true);
   scene.updateMatrixWorld(true);
+
+  if (vrQuickMenuOpen) {
+    applyVrQuickMenuSelection();
+    return;
+  }
+
   const region = getSelectableRegionFromController(controller);
 
   if (region) {
-    setPanelVisibility(false);
     showRegionInfo(region, null);
     return;
   }
@@ -672,10 +1050,13 @@ function setControllerRayAppearance(controller, isTargetingRegion) {
 function updateVRMovement(deltaSeconds) {
   if (!renderer.xr.isPresenting || !worldRoot) return;
 
-  if (isPanelVisible()) {
+  if (vrQuickMenuOpen) {
+    updateVrQuickMenuFromAxes();
     vrInput.right = null;
     return;
   }
+
+  setControllerRayAppearance(getRightController(), false);
 
   updateVRInputSources();
   const zoomAxes = vrInput.right;
@@ -687,7 +1068,6 @@ function updateVRMovement(deltaSeconds) {
     if (zoomY !== 0) {
       closeRegionInfo();
       worldRoot.position.z -= zoomY * vrZoomConfig.speed * deltaSeconds;
-      worldRoot.position.z = THREE.MathUtils.clamp(worldRoot.position.z, vrZoomConfig.minZ, vrZoomConfig.maxZ);
     }
 
     if (rotateX !== 0) {
@@ -704,6 +1084,10 @@ function onWindowResize() {
 }
 
 function onDocumentClick(event) {
+  if (renderer?.xr?.isPresenting) {
+    return;
+  }
+
   // Skip if mouse is over UI elements
   if (
     event.target.closest('#panel') ||
@@ -913,6 +1297,11 @@ function render() {
 
   if (presenting) {
     updateVRMovement(deltaSeconds);
+    if (vrQuickMenuOpen) {
+      updateVrQuickMenuPanelPose();
+      updateVrQuickMenuPanelVisual();
+      setControllerRayAppearance(getRightController(), true);
+    }
   }
 
   if (!presenting) {
