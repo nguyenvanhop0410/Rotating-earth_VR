@@ -182,7 +182,7 @@ function createCityLightsLayer({ earthRadius, sunDirection, nightTexture = null 
   const material = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
-    depthTest: false,
+    depthTest: true,
     blending: THREE.AdditiveBlending,
     uniforms: {
       uNightMap: { value: nightTexture },
@@ -215,7 +215,10 @@ function createCityLightsLayer({ earthRadius, sunDirection, nightTexture = null 
         vec3 sunDir = normalize(uSunDirection);
 
         float nDotL = dot(n, sunDir);
-        float nightFactor = 1.0 - smoothstep(-0.06, 0.14, nDotL);
+        // Fade lights out near the day side and force fully-off in clear sunlight.
+        float nightFactor = 1.0 - smoothstep(-0.06, 0.10, nDotL);
+        float dayMask = smoothstep(0.02, 0.18, nDotL);
+        nightFactor *= (1.0 - dayMask);
 
         vec3 nightTex = texture2D(uNightMap, vUv).rgb;
         float nightTexLuma = dot(nightTex, vec3(0.2126, 0.7152, 0.0722));
@@ -227,7 +230,7 @@ function createCityLightsLayer({ earthRadius, sunDirection, nightTexture = null 
         float depthShape = pow(viewFacing, 0.55);
 
         float glow = city * nightFactor * uIntensity * (0.52 + depthShape * 0.48);
-        if (glow < 0.002) discard;
+        if (glow < 0.003) discard;
 
         vec3 color = nightTex * 1.35;
         gl_FragColor = vec4(color * glow * 1.25, min(glow * 1.05, 1.0));
