@@ -200,11 +200,13 @@ function init() {
 
   keySunLight = new THREE.DirectionalLight(0xfff1d2, 4.7);
   keySunLight.position.copy(sunPosition);
-  scene.add(keySunLight);
+  keySunLight.target.position.set(0, 0, 0);
+  worldRoot.add(keySunLight);
+  worldRoot.add(keySunLight.target);
 
   const sunBloomLight = new THREE.PointLight(0xff9b2f, 2.9, 0, 2);
   sunBloomLight.position.copy(sunPosition);
-  scene.add(sunBloomLight);
+  worldRoot.add(sunBloomLight);
 
   const fillLight = new THREE.DirectionalLight(0x89a8d6, 0.04);
   fillLight.position.set(-16, -9, -12);
