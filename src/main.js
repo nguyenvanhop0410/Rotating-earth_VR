@@ -99,6 +99,11 @@ let vrMenuGroup;
 let vrMenuTexture;
 let vrMenuCanvas;
 let vrMenuContext;
+let vrRegionInfoGroup;
+let vrRegionInfoTexture;
+let vrRegionInfoCanvas;
+let vrRegionInfoContext;
+let vrRegionInfoState = null;
 
 const vrMenu3DConfig = {
   distance: 1.18,
@@ -106,6 +111,14 @@ const vrMenu3DConfig = {
   verticalOffset: -0.02,
   width: 0.94,
   height: 0.64
+};
+
+const vrRegionInfo3DConfig = {
+  distance: 1.12,
+  sideOffset: 0,
+  verticalOffset: -0.34,
+  width: 1.08,
+  height: 0.62
 };
 
 const _tmpMenuCameraPos = new THREE.Vector3();
@@ -327,6 +340,7 @@ function init() {
   });
 
   initVrQuickMenuPanel3D();
+  initVrRegionInfoPanel3D();
 
   if (coordinatesMesh) coordinatesMesh.visible = coordinatesOverlayEnabled;
   syncPanelToggleButton();
@@ -462,6 +476,49 @@ function initVrQuickMenuPanel3D() {
   updateVrQuickMenuPanelVisual();
 }
 
+function initVrRegionInfoPanel3D() {
+  if (vrRegionInfoGroup || !scene) return;
+
+  vrRegionInfoCanvas = document.createElement('canvas');
+  vrRegionInfoCanvas.width = 1024;
+  vrRegionInfoCanvas.height = 640;
+  vrRegionInfoContext = vrRegionInfoCanvas.getContext('2d');
+  if (!vrRegionInfoContext) return;
+
+  vrRegionInfoTexture = new THREE.CanvasTexture(vrRegionInfoCanvas);
+  vrRegionInfoTexture.minFilter = THREE.LinearFilter;
+  vrRegionInfoTexture.magFilter = THREE.LinearFilter;
+  vrRegionInfoTexture.generateMipmaps = false;
+
+  const panelGeometry = new THREE.PlaneGeometry(vrRegionInfo3DConfig.width, vrRegionInfo3DConfig.height);
+  const panelMaterial = new THREE.MeshBasicMaterial({
+    map: vrRegionInfoTexture,
+    transparent: true,
+    depthWrite: false
+  });
+  const panelMesh = new THREE.Mesh(panelGeometry, panelMaterial);
+  panelMesh.renderOrder = 1200;
+
+  const glowGeometry = new THREE.PlaneGeometry(vrRegionInfo3DConfig.width * 1.03, vrRegionInfo3DConfig.height * 1.05);
+  const glowMaterial = new THREE.MeshBasicMaterial({
+    color: 0xffb66a,
+    transparent: true,
+    opacity: 0.09,
+    depthWrite: false
+  });
+  const glowMesh = new THREE.Mesh(glowGeometry, glowMaterial);
+  glowMesh.position.z = -0.002;
+  glowMesh.renderOrder = 1199;
+
+  vrRegionInfoGroup = new THREE.Group();
+  vrRegionInfoGroup.visible = false;
+  vrRegionInfoGroup.add(glowMesh);
+  vrRegionInfoGroup.add(panelMesh);
+  scene.add(vrRegionInfoGroup);
+
+  updateVrRegionInfoPanelVisual();
+}
+
 function updateVrQuickMenuPanelPose() {
   if (!vrMenuGroup || !camera) return;
 
@@ -477,6 +534,23 @@ function updateVrQuickMenuPanelPose() {
 
   camera.getWorldQuaternion(_tmpMenuQuat);
   vrMenuGroup.quaternion.copy(_tmpMenuQuat);
+}
+
+function updateVrRegionInfoPanelPose() {
+  if (!vrRegionInfoGroup || !camera) return;
+
+  camera.getWorldPosition(_tmpMenuCameraPos);
+  camera.getWorldDirection(_tmpMenuForward).normalize();
+  _tmpMenuRight.crossVectors(_tmpMenuForward, camera.up).normalize();
+  _tmpMenuUp.crossVectors(_tmpMenuRight, _tmpMenuForward).normalize();
+
+  vrRegionInfoGroup.position.copy(_tmpMenuCameraPos)
+    .addScaledVector(_tmpMenuForward, vrRegionInfo3DConfig.distance)
+    .addScaledVector(_tmpMenuRight, vrRegionInfo3DConfig.sideOffset)
+    .addScaledVector(_tmpMenuUp, vrRegionInfo3DConfig.verticalOffset);
+
+  camera.getWorldQuaternion(_tmpMenuQuat);
+  vrRegionInfoGroup.quaternion.copy(_tmpMenuQuat);
 }
 
 function drawRoundedRect(ctx, x, y, width, height, radius, fillStyle, strokeStyle) {
@@ -501,6 +575,103 @@ function drawRoundedRect(ctx, x, y, width, height, radius, fillStyle, strokeStyl
     ctx.strokeStyle = strokeStyle;
     ctx.stroke();
   }
+}
+
+function wrapCanvasText(ctx, text, maxWidth) {
+  const words = String(text).split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [''];
+
+  const lines = [];
+  let line = words[0];
+
+  for (let i = 1; i < words.length; i++) {
+    const nextLine = `${line} ${words[i]}`;
+    if (ctx.measureText(nextLine).width > maxWidth) {
+      lines.push(line);
+      line = words[i];
+    } else {
+      line = nextLine;
+    }
+  }
+
+  lines.push(line);
+  return lines;
+}
+
+function buildVrRegionInfoLines() {
+  if (!vrRegionInfoState?.region) {
+    return {
+      title: 'Chọn địa điểm',
+      subtitle: 'Dùng tia laser rồi bấm cò để xem thông tin.',
+      lines: []
+    };
+  }
+
+  const { region, cityTime, utcTime, status } = vrRegionInfoState;
+  const timezone = region.timezone || 'N/A';
+  const timeLabel = status === 'loading' ? 'Đang tải...' : cityTime || 'Không có dữ liệu';
+  const utcLabel = status === 'loading' ? 'Đang tải...' : utcTime || 'Không có dữ liệu';
+
+  return {
+    title: region.name,
+    subtitle: 'Thông tin địa điểm đang được hiển thị trong VR',
+    lines: [
+      `Vĩ độ: ${region.lat.toFixed(2)}°`,
+      `Kinh độ: ${region.lon.toFixed(2)}°`,
+      `Múi giờ: ${timezone}`,
+      `Giờ hiện tại: ${timeLabel}`,
+      `UTC+0: ${utcLabel}`
+    ]
+  };
+}
+
+function updateVrRegionInfoPanelVisual() {
+  if (!vrRegionInfoContext || !vrRegionInfoCanvas || !vrRegionInfoTexture) return;
+
+  const ctx = vrRegionInfoContext;
+  const width = vrRegionInfoCanvas.width;
+  const height = vrRegionInfoCanvas.height;
+  const { title, subtitle, lines } = buildVrRegionInfoLines();
+
+  const background = ctx.createLinearGradient(0, 0, width, height);
+  background.addColorStop(0, 'rgba(32, 14, 8, 0.97)');
+  background.addColorStop(1, 'rgba(14, 8, 4, 0.97)');
+  ctx.fillStyle = background;
+  ctx.fillRect(0, 0, width, height);
+
+  drawRoundedRect(ctx, 22, 22, width - 44, height - 44, 28, 'rgba(54, 24, 14, 0.68)', 'rgba(255, 181, 120, 0.44)');
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#fff4ea';
+  ctx.font = '700 44px Sora, Segoe UI, sans-serif';
+  ctx.fillText(title, 62, 90);
+
+  ctx.font = '500 22px Sora, Segoe UI, sans-serif';
+  ctx.fillStyle = 'rgba(255, 229, 206, 0.9)';
+  const subtitleLines = wrapCanvasText(ctx, subtitle, width - 124);
+  subtitleLines.slice(0, 2).forEach((line, index) => {
+    ctx.fillText(line, 62, 126 + index * 26);
+  });
+
+  let y = 220;
+  for (const line of lines) {
+    ctx.font = '600 28px Sora, Segoe UI, sans-serif';
+    ctx.fillStyle = '#ffe8d4';
+    const wrapped = wrapCanvasText(ctx, line, width - 124);
+    for (const wrappedLine of wrapped) {
+      ctx.fillText(wrappedLine, 62, y);
+      y += 40;
+    }
+    y += 8;
+  }
+
+  if (!vrRegionInfoState?.region) {
+    ctx.font = '500 23px Sora, Segoe UI, sans-serif';
+    ctx.fillStyle = 'rgba(255, 229, 206, 0.9)';
+    ctx.fillText('Panel này sẽ hiện khi bạn chọn một địa điểm bằng cò.', 62, height - 62);
+  }
+
+  vrRegionInfoTexture.needsUpdate = true;
 }
 
 function updateVrQuickMenuPanelVisual() {
@@ -1205,6 +1376,12 @@ async function updateRegionTimes(region, requestId) {
   if (!timeZoneId) {
     cityTimeEl.textContent = 'Không có dữ liệu';
     utcTimeEl.textContent = 'Không có dữ liệu';
+    if (vrRegionInfoState && vrRegionInfoState.region?.name === region.name) {
+      vrRegionInfoState.status = 'ready';
+      vrRegionInfoState.cityTime = 'Không có dữ liệu';
+      vrRegionInfoState.utcTime = 'Không có dữ liệu';
+      updateVrRegionInfoPanelVisual();
+    }
     return;
   }
 
@@ -1222,10 +1399,22 @@ async function updateRegionTimes(region, requestId) {
 
     cityTimeEl.textContent = cityTimeData.time;
     utcTimeEl.textContent = utcTimeData.time;
+    if (vrRegionInfoState && vrRegionInfoState.region?.name === region.name) {
+      vrRegionInfoState.status = 'ready';
+      vrRegionInfoState.cityTime = cityTimeData.time;
+      vrRegionInfoState.utcTime = utcTimeData.time;
+      updateVrRegionInfoPanelVisual();
+    }
   } catch (error) {
     if (requestId !== activeRegionTimeRequest) return;
     cityTimeEl.textContent = 'Lỗi tải giờ';
     utcTimeEl.textContent = 'Lỗi tải giờ';
+    if (vrRegionInfoState && vrRegionInfoState.region?.name === region.name) {
+      vrRegionInfoState.status = 'error';
+      vrRegionInfoState.cityTime = 'Lỗi tải giờ';
+      vrRegionInfoState.utcTime = 'Lỗi tải giờ';
+      updateVrRegionInfoPanelVisual();
+    }
   }
 }
 
@@ -1235,6 +1424,24 @@ function showRegionInfo(region, clickPoint) {
   document.getElementById('regionLat').textContent = `${region.lat.toFixed(2)}°`;
   document.getElementById('regionLon').textContent = `${region.lon.toFixed(2)}°`;
   document.getElementById('regionTimezone').textContent = region.timezone || 'N/A';
+
+  vrRegionInfoState = {
+    region,
+    cityTime: '--:--:--',
+    utcTime: '--:--:--',
+    status: 'loading'
+  };
+
+  if (renderer?.xr?.isPresenting) {
+    if (panel) panel.classList.add('hidden');
+    if (vrRegionInfoGroup) {
+      vrRegionInfoGroup.visible = true;
+      updateVrRegionInfoPanelPose();
+      updateVrRegionInfoPanelVisual();
+    }
+  } else if (panel) {
+    panel.classList.remove('hidden');
+  }
 
   // Anchor panel to click point: always prioritize right side and stay near city label.
   const panelWidth = 320;
@@ -1262,8 +1469,10 @@ function showRegionInfo(region, clickPoint) {
 
   panel.style.left = `${Math.max(margin, finalX)}px`;
   panel.style.top = `${finalY}px`;
-  
-  panel.classList.remove('hidden');
+
+  if (panel && !renderer?.xr?.isPresenting) {
+    panel.classList.remove('hidden');
+  }
 
   activeRegionTimeRequest += 1;
   const requestId = activeRegionTimeRequest;
@@ -1273,6 +1482,8 @@ function showRegionInfo(region, clickPoint) {
 function closeRegionInfo() {
   const panel = document.getElementById('regionInfo');
   if (panel) panel.classList.add('hidden');
+  vrRegionInfoState = null;
+  if (vrRegionInfoGroup) vrRegionInfoGroup.visible = false;
 }
 
 function animate() {
@@ -1301,6 +1512,9 @@ function render() {
       updateVrQuickMenuPanelPose();
       updateVrQuickMenuPanelVisual();
       setControllerRayAppearance(getRightController(), true);
+    }
+    if (vrRegionInfoGroup?.visible) {
+      updateVrRegionInfoPanelPose();
     }
   }
 
