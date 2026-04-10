@@ -334,11 +334,11 @@ function init() {
       if (coordinatesMesh) coordinatesMesh.visible = enabled;
     },
     onResetView: () => {
-      applyCameraPreset('default');
+      applyViewPreset('default');
     },
-    onViewSatellite: () => applyCameraPreset('satellite'),
-    onViewMoon: () => applyCameraPreset('moon'),
-    onViewSun: () => applyCameraPreset('sun')
+    onViewSatellite: () => applyViewPreset('satellite'),
+    onViewMoon: () => applyViewPreset('moon'),
+    onViewSun: () => applyViewPreset('sun')
   });
 
   initVrQuickMenuPanel3D();
@@ -751,10 +751,10 @@ function updateVrQuickMenuPanelVisual() {
 
 function getVrQuickMenuItems() {
   return [
-    { type: 'action', label: 'Reset góc nhìn', execute: () => applyCameraPreset('default') },
-    { type: 'action', label: 'Góc nhìn vệ tinh', execute: () => applyCameraPreset('satellite') },
-    { type: 'action', label: 'Góc nhìn Mặt Trăng', execute: () => applyCameraPreset('moon') },
-    { type: 'action', label: 'Góc nhìn Mặt Trời', execute: () => applyCameraPreset('sun') },
+    { type: 'action', label: 'Reset góc nhìn', execute: () => applyViewPreset('default') },
+    { type: 'action', label: 'Góc nhìn vệ tinh', execute: () => applyViewPreset('satellite') },
+    { type: 'action', label: 'Góc nhìn Mặt Trăng', execute: () => applyViewPreset('moon') },
+    { type: 'action', label: 'Góc nhìn Mặt Trời', execute: () => applyViewPreset('sun') },
     {
       type: 'range',
       label: 'Tốc độ quay Trái Đất',
@@ -926,6 +926,100 @@ function setViewObjectVisibility({ sunVisible = true, moonVisible = true, satell
   if (sunGroup) sunGroup.visible = sunVisible;
   if (moonPivotRef) moonPivotRef.visible = moonVisible;
   if (satelliteGroupRef) satelliteGroupRef.visible = satelliteVisible;
+}
+
+function applyViewPreset(preset) {
+  if (renderer?.xr?.isPresenting) {
+    applyVrViewPreset(preset);
+    return;
+  }
+
+  applyCameraPreset(preset);
+}
+
+function getVrHeadYaw() {
+  if (!renderer || !camera) return 0;
+
+  const xrCamera = renderer.xr.getCamera(camera);
+  const headForward = new THREE.Vector3();
+  xrCamera.getWorldDirection(headForward);
+
+  const yawForward = new THREE.Vector3(headForward.x, 0, headForward.z);
+  if (yawForward.lengthSq() < 1e-6) return 0;
+  yawForward.normalize();
+
+  return Math.atan2(yawForward.x, -yawForward.z);
+}
+
+function placeVrWorldFromVirtualCamera(virtualCameraPos, worldScale = vrDefaultScale) {
+  if (!renderer || !camera || !worldRoot) return;
+
+  const xrCamera = renderer.xr.getCamera(camera);
+  const headPos = new THREE.Vector3();
+  xrCamera.getWorldPosition(headPos);
+
+  const desired = virtualCameraPos.clone();
+  desired.applyAxisAngle(new THREE.Vector3(0, 1, 0), getVrHeadYaw());
+
+  worldRoot.rotation.set(0, 0, 0);
+  vrWorldScale = worldScale;
+  worldRoot.scale.setScalar(vrWorldScale);
+  worldRoot.position.copy(headPos).sub(desired);
+}
+
+function applyVrViewPreset(preset) {
+  if (!worldRoot) return;
+
+  setViewObjectVisibility({ sunVisible: true, moonVisible: true, satelliteVisible: true });
+
+  if (preset === 'default') {
+    placeVrWorldFromVirtualCamera(new THREE.Vector3(0, 0.38, 4.8), vrDefaultScale);
+    return;
+  }
+
+  if (preset === 'satellite') {
+    setViewObjectVisibility({ sunVisible: true, moonVisible: true, satelliteVisible: false });
+    const r = SETTINGS.earthRadius;
+    const orbitAltitude = r * 0.18;
+    const distanceFromCenter = r + orbitAltitude;
+    const direction = new THREE.Vector3(0.88, 0.2, 0.43).normalize();
+    const satellitePos = direction.multiplyScalar(distanceFromCenter);
+    placeVrWorldFromVirtualCamera(satellitePos, 1.02);
+    return;
+  }
+
+  if (preset === 'moon') {
+    setViewObjectVisibility({ sunVisible: true, moonVisible: false, satelliteVisible: true });
+
+    const r = SETTINGS.earthRadius;
+    const earthWorld = new THREE.Vector3();
+    const moonWorld = new THREE.Vector3();
+    earthGroup.getWorldPosition(earthWorld);
+    moonMeshRef?.getWorldPosition(moonWorld);
+
+    let moonDirection = moonWorld.sub(earthWorld);
+    if (moonDirection.lengthSq() < 1e-6) {
+      moonDirection = new THREE.Vector3(1, 0, 0);
+    }
+
+    moonDirection.normalize();
+    const moonObserverDistance = r * 3.25 - r * 0.27;
+    const moonObserverPos = moonDirection.multiplyScalar(moonObserverDistance);
+    placeVrWorldFromVirtualCamera(moonObserverPos, 0.72);
+    return;
+  }
+
+  if (preset === 'sun') {
+    setViewObjectVisibility({ sunVisible: false, moonVisible: true, satelliteVisible: true });
+    const sunDir = sunPosition.clone().normalize();
+    const sideAxis = Math.abs(sunDir.y) > 0.85 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+    const sideOffset = new THREE.Vector3().crossVectors(sunDir, sideAxis).normalize().multiplyScalar(5.2);
+    const sunObserverPos = sunDir.multiplyScalar(18).add(sideOffset);
+    placeVrWorldFromVirtualCamera(sunObserverPos, 0.6);
+    return;
+  }
+
+  placeVrWorldFromVirtualCamera(new THREE.Vector3(0, 0.38, 4.8), vrDefaultScale);
 }
 
 function applyCameraPreset(preset) {
